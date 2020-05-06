@@ -608,7 +608,7 @@ endif
 
 ifeq ($(USE_SOCCR),)
 #OPTIONS_LDFLAGS += -L./soccr -lsoccr libsoccr.a -lnet
-OPTIONS_LDFLAGS += -L./soccr -lsoccr ./soccr/libsoccr.a -lnet
+OPTIONS_LDFLAGS += -L./soccr -lsoccr ./soccr/libsoccr.a -lnet 
 endif
 
 ifneq ($(USE_PCRE)$(USE_STATIC_PCRE)$(USE_PCRE_JIT),)

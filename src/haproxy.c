@@ -98,6 +98,8 @@
 #include <types/global.h>
 #include <types/acl.h>
 #include <types/peers.h>
+#include <types/tcp_repair.h>
+#include <libs/soccr.h>
 
 #include <proto/acl.h>
 #include <proto/activity.h>
@@ -128,11 +130,12 @@
 #include <proto/dns.h>
 #include <proto/vars.h>
 #include <proto/ssl_sock.h>
-
+#include <sys/epoll.h>
 #define MAX_PAYLOAD 384
 
 #define DEBUG_SHM_IPC 0
-
+#define MAX_EVENT 20
+#define READ_BUF_LEN 256
 /* array of init calls for older platforms */
 DECLARE_INIT_STAGES;
 
@@ -191,7 +194,10 @@ struct global global = {
 };
 
 /*********************************************************************/
-
+int dump_cfd;
+int dump_backend_fd;
+uint16_t client_port = 0;
+uint32_t client_addr = 0;
 int stopping;	/* non zero means stopping in progress */
 int killed;	/* non zero means a hard-stop is triggered */
 int jobs = 0;   /* number of active jobs (conns, listeners, active tasks, ...) */
@@ -2696,6 +2702,309 @@ static struct task *manage_global_listener_queue(struct task *t, void *context, 
 	return t;
 }
 
+int listen_to_primary()
+{
+	int sockfd, pri_fd;
+	struct sockaddr_in pri_addr, back_addr;
+	int len = sizeof(pri_addr);
+
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd == -1) {
+        printf("socket creation failed...\n");
+        exit(0);
+    }
+
+	bzero(&back_addr, sizeof(back_addr));  
+	back_addr.sin_family = AF_INET;  
+	back_addr.sin_addr.s_addr = global.backup_addr;
+	back_addr.sin_port = htons(global.port_range[0]);  
+	bind(sockfd, (struct sockaddr*)&back_addr, sizeof(back_addr));
+
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one)) < 0)
+        perror("setsockopt(SO_REUSEADDR) failed");
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, (const char*)&one, sizeof(one)) < 0) 
+		perror("setsockopt(SO_REUSEPORT) failed");
+	if( (setsockopt(sockfd, SOL_IP, IP_TRANSPARENT, &one, sizeof(one)) == -1) ) 
+		printf("IP_TRANSPARENT fail! \n");
+
+	if ((listen(sockfd, 50)) != 0) { 
+        printf("Listen failed ...\n"); 
+        exit(0); 
+    }     
+    else
+        printf("proxy listening ..\n");
+
+	return sockfd;
+}
+
+void func(int sockfd) 
+{ 
+    char buff[80]; 
+    int n; 
+    // infinite loop for chat 
+    for (;;) { 
+        bzero(buff, 80); 
+        // read the message from client and copy it in buffer 
+        int ret = read(sockfd, buff, sizeof(buff));
+		printf("buff:%s \n", buff);
+        //printf("ret:%d \n", ret);
+		//printf("errno:%d", errno);
+		// print buffer which contains the client contents 
+
+        // copy server message in the buffer 
+        /*printf("Enter the string : ");
+        n = 0;
+        while ((buff[n++] = getchar()) != '\n')
+            ;
+        write(sockfd, buff, sizeof(buff));*/
+
+        // if msg contains "Exit" then server exit and chat ended. 
+        if (strncmp("exit", buff, 4) == 0) { 
+            memcpy(buff,"exit",4);
+            write(sockfd, buff, sizeof(buff));
+            //break; 
+        } 
+    } 
+} 
+
+/**
+ * 设置 file describe 为非阻塞模式
+ * @param fd 文件描述
+ * @return 返回0成功，返回-1失败
+ */
+static int make_socket_non_blocking (int fd) {
+    int flags, s;
+    // 获取当前flag
+    flags = fcntl(fd, F_GETFL, 0);
+    if (-1 == flags) {
+        perror("Get fd status");
+        return -1;
+    }
+
+    flags |= O_NONBLOCK;
+
+    // 设置flag
+    s = fcntl(fd, F_SETFL, flags);
+    if (-1 == s) {
+        perror("Set fd status");
+        return -1;
+    }
+    return 0;
+}
+
+void *pri_proxy_conn(void *arg)
+{
+	int epfd = 0, listenfd, result;
+	struct epoll_event ev, event[MAX_EVENT];
+	static int cnt = 0;
+	// 创建epoll实例
+    epfd = epoll_create1(0);
+    if (1 == epfd) {
+        perror("Create epoll instance");
+        return 0;
+    }
+
+	listenfd = listen_to_primary();
+	result = make_socket_non_blocking(listenfd);
+    if (-1 == result) {
+        return 0;
+    }
+
+    ev.data.fd = listenfd;
+    ev.events = EPOLLIN | EPOLLET /* 边缘触发选项。 */;
+    // 设置epoll的事件
+    result = epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &ev);
+
+    if(-1 == result) {
+        perror("Set epoll_ctl");
+        return 0;
+    }
+
+	for ( ; ; ) {
+        int wait_count;
+        // 等待事件
+        wait_count = epoll_wait(epfd, event, MAX_EVENT, -1);
+
+        for (int i = 0 ; i < wait_count; i++) {
+            uint32_t events = event[i].events;
+            // IP地址缓存
+            char host_buf[NI_MAXHOST];
+            // PORT缓存
+            char port_buf[NI_MAXSERV];
+
+            int __result;
+            // 判断epoll是否发生错误
+            if ( events & EPOLLERR || events & EPOLLHUP || (! events & EPOLLIN)) {
+                printf("Epoll has error\n");
+                close (event[i].data.fd);
+                continue;
+            } else if (listenfd == event[i].data.fd) {
+                // listen的 file describe 事件触发， accpet事件
+
+                for ( ; ; ) { // 由于采用了边缘触发模式，这里需要使用循环
+                    struct sockaddr in_addr = { 0 };
+                    socklen_t in_addr_len = sizeof (in_addr);
+                    int accp_fd = accept(listenfd, &in_addr, &in_addr_len);
+                    if (-1 == accp_fd) {
+                        perror("Accept");
+                        break;
+                    }
+
+					dt_info* data = get_dump_info(accp_fd);
+					print_info(data);
+
+					int fd = socket(AF_INET, SOCK_STREAM, 0);
+					//dump_cfd = task_fd;
+					//close(task_fd);
+					
+					if(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one)) < 0)
+						perror("setsockopt(SO_REUSEADDR) failed");
+					if(setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (const char*)&one, sizeof(one)) < 0) 
+						perror("setsockopt(SO_REUSEPORT) failed");
+					if((setsockopt(fd, SOL_IP, IP_TRANSPARENT, &one, sizeof(one)) == -1) ) 
+						printf("IP_TRANSPARENT fail! \n");
+					if((setsockopt(fd, SOL_IP, IP_FREEBIND, &one, sizeof(one)) == -1) )
+						printf("IP_FREEBIND fail! \n");
+					if(cnt%2 == 0)	//frontend fd
+						restore_one_tcp_HA(fd, data, 1);
+					else 			//backend fd
+						restore_one_tcp_HA(fd, data, 0);
+
+					if (tcp_repair_off(fd) < 0) {
+						return -1;
+					}
+					
+                    __result = getnameinfo(&in_addr, sizeof (in_addr),
+                                           host_buf, sizeof (host_buf) / sizeof (host_buf[0]),
+                                           port_buf, sizeof (port_buf) / sizeof (port_buf[0]),
+                                           NI_NUMERICHOST | NI_NUMERICSERV);
+
+                    if (! __result) {
+                        printf("New connection: host = %s, port = %s\n", host_buf, port_buf);
+                    }
+					
+                    __result = make_socket_non_blocking(fd);
+                    if (-1 == __result) {
+                        return 0;
+                    }
+					printf("fd:%d\n", fd);
+                    //ev.data.fd = fd;	//if add this fd to epoll, the thread could polling to recv port mirror data
+                    ev.events = EPOLLIN | EPOLLET;
+                    // 为新accept的 file describe 设置epoll事件
+                    //__result = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
+
+                    if (-1 == __result) {
+                        perror("epoll_ctl");
+                        return 0;
+                    }
+					if((cnt++)%2 == 0)	//frontend fd
+					{
+						dump_cfd = fd;
+					}
+					else	//backend fd
+					{
+						dump_backend_fd = fd;
+						printf("dump_backend_fd:%d\n", dump_backend_fd);
+							//func(dump_backend_fd);
+					}
+					
+					//close(accp_fd);
+					
+                }
+                continue;
+            } else {
+                // 其余事件为 file describe 可以读取
+                int done = 0;
+                // 因为采用边缘触发，所以这里需要使用循环。如果不使用循环，程序并不能完全读取到缓存区里面的数据。
+                for ( ; ;) {
+                    ssize_t result_len = 0;
+                    char buf[READ_BUF_LEN] = { 0 };
+
+                    result_len = read(event[i].data.fd, buf, sizeof (buf) / sizeof (buf[0]));
+
+                    if (-1 == result_len) {
+                        if (EAGAIN != errno) {
+                            perror ("Read data");
+                            done = 1;
+                        }
+                        break;
+                    } else if (! result_len) {
+                        done = 1;
+                        break;
+                    }
+                    printf("fd:%d\n", event[i].data.fd);
+                    write(STDOUT_FILENO, buf, result_len);
+                }
+                if (done) {
+                    printf("Closed connection\n");
+                    close (event[i].data.fd);
+                }
+            }
+        }
+
+    }
+}
+static int restore_tcp_conn_state_HA(int fd, struct libsoccr_sk *socr, dt_info* data, int is_cfd)
+{
+	int aux;
+	union libsoccr_addr sa_src, sa_dst;
+	//print_info(data);
+	struct sockaddr_in clinetaddr,serveraddr;
+	if(is_cfd)		//for frontend fd
+	{
+		client_addr = &data->sk_hd.src_addr;
+		client_port = data->sk_hd.src_port; 
+		if (restore_sockaddr_HA(&sa_src,
+				AF_INET, data->sk_hd.dst_port, 
+				&data->sk_hd.dst_addr, 0) < 0)	
+		goto err;
+		if (restore_sockaddr_HA(&sa_dst,
+					AF_INET, data->sk_hd.src_port,		
+					&data->sk_hd.src_addr, 0) < 0)		
+		goto err;
+	}
+	else			//for backend fd
+	{
+		if (restore_sockaddr_HA(&sa_src,
+				AF_INET, data->sk_hd.src_port, 
+				&data->sk_hd.src_addr, 0) < 0)	
+		goto err;
+		if (restore_sockaddr_HA(&sa_dst,
+					AF_INET, data->sk_hd.dst_port,		
+					&data->sk_hd.dst_addr, 0) < 0)		
+		goto err;
+	}
+
+	libsoccr_set_addr(socr, 1, &sa_src, 0);
+	libsoccr_set_addr(socr, 0, &sa_dst, 0);
+
+	if (libsoccr_restore_HA(socr, data, sizeof(*data)))
+		goto err;
+
+	return 0;
+
+err:
+	return -1;
+}
+int restore_one_tcp_HA(int fd, dt_info* data, int is_cfd)
+{
+	struct libsoccr_sk *sk;
+
+	printf("Restoring TCP connection\n");
+
+	sk = libsoccr_pause(fd);
+	if (!sk)
+		return -1;
+
+	if (restore_tcp_conn_state_HA(fd, sk, data, is_cfd)) {
+		libsoccr_release(sk);
+		return -1;
+	}
+	release_sk(sk);
+	return 0;
+}
+
+
 int main(int argc, char **argv)
 {
 	int err, retry;
@@ -2708,9 +3017,15 @@ int main(int argc, char **argv)
     struct sockaddr_nl dest_addr;
     struct iovec iov;
 
-	pthread_t ipc;
+	pthread_t ipc, tid;
 	pthread_create(&ipc, NULL, ipc_handler, "Child");
 	
+	if(!global.is_primary)
+	{
+		if( pthread_create(&tid, NULL, pri_proxy_conn, (void*) &dump_cfd) != 0 )		
+        printf("Failed to create thread1\n");
+	}	
+
 
 #if USING_NETLINK	
 	int sock_fd = 0;

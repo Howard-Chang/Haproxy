@@ -61,7 +61,8 @@
 #include <proto/task.h>
 #include <proto/tcp_rules.h>
 #include <types/cuju_ft.h>
-
+struct sockaddr *backend_addr;
+int backend_fd;
 static int tcp_bind_listeners(struct protocol *proto, char *errmsg, int errlen);
 static int tcp_bind_listener(struct listener *listener, char *errmsg, int errlen);
 static void tcpv4_add_listener(struct listener *listener, int port);
@@ -78,6 +79,7 @@ static struct protocol proto_tcpv4 = {
 	.l3_addrlen = 32/8,
 	.accept = &listener_accept,
 	.connect = tcp_connect_server,
+	.connect_ft = tcp_connect_server_ft,
 	.bind = tcp_bind_listener,
 	.bind_all = tcp_bind_listeners,
 	.unbind_all = unbind_all_listeners,
@@ -103,6 +105,7 @@ static struct protocol proto_tcpv6 = {
 	.l3_addrlen = 128/8,
 	.accept = &listener_accept,
 	.connect = tcp_connect_server,
+	.connect_ft = tcp_connect_server_ft,
 	.bind = tcp_bind_listener,
 	.bind_all = tcp_bind_listeners,
 	.unbind_all = unbind_all_listeners,
@@ -580,7 +583,12 @@ int tcp_connect_server(struct connection *conn, int flags)
 		conn->flags |= CO_FL_ERROR;
 		return SF_ERR_RESOURCE;
 	}
-
+	//TCP repair
+	if(global.is_primary)
+	{
+		backend_fd = fd;
+		backend_addr = addr;
+	}
 #if USING_TCP_REPAIR
 	conn->addr_from = ntohl(((struct sockaddr_in *)&conn->addr.from)->sin_addr.s_addr);
 	conn->addr_to = ntohl(((struct sockaddr_in *)&conn->addr.to)->sin_addr.s_addr);
@@ -610,6 +618,301 @@ int tcp_connect_server(struct connection *conn, int flags)
 	return SF_ERR_NONE;  /* connection is OK */
 }
 
+int tcp_connect_server_ft(struct connection *conn, int flags)
+{
+	int fd;
+	struct server *srv;
+	struct proxy *be;
+	struct conn_src *src;
+	int use_fastopen = 0;
+	struct sockaddr_storage *addr;
+	printf("enter tcp_connect_server ft\n");
+	conn->flags |= CO_FL_WAIT_L4_CONN; /* connection in progress */
+
+	switch (obj_type(conn->target)) {
+	case OBJ_TYPE_PROXY:
+		be = objt_proxy(conn->target);
+		srv = NULL;
+		break;
+	case OBJ_TYPE_SERVER:
+		srv = objt_server(conn->target);
+		be = srv->proxy;
+		/* Make sure we check that we have data before activating
+		 * TFO, or we could trigger a kernel issue whereby after
+		 * a successful connect() == 0, any subsequent connect()
+		 * will return EINPROGRESS instead of EISCONN.
+		 */
+		use_fastopen = (srv->flags & SRV_F_FASTOPEN) &&
+		               ((flags & (CONNECT_CAN_USE_TFO | CONNECT_HAS_DATA)) ==
+				(CONNECT_CAN_USE_TFO | CONNECT_HAS_DATA));
+		break;
+	default:
+		conn->flags |= CO_FL_ERROR;
+		return SF_ERR_INTERNAL;
+	}
+
+	fd = conn->handle.fd = dump_backend_fd; //create_server_socket(conn);
+
+	/*if (fd == -1) {
+		qfprintf(stderr, "Cannot get a server socket.\n");
+
+		if (errno == ENFILE) {
+			conn->err_code = CO_ER_SYS_FDLIM;
+			send_log(be, LOG_EMERG,
+				 "Proxy %s reached system FD limit (maxsock=%d). Please check system tunables.\n",
+				 be->id, global.maxsock);
+		}
+		else if (errno == EMFILE) {
+			conn->err_code = CO_ER_PROC_FDLIM;
+			send_log(be, LOG_EMERG,
+				 "Proxy %s reached process FD limit (maxsock=%d). Please check 'ulimit-n' and restart.\n",
+				 be->id, global.maxsock);
+		}
+		else if (errno == ENOBUFS || errno == ENOMEM) {
+			conn->err_code = CO_ER_SYS_MEMLIM;
+			send_log(be, LOG_EMERG,
+				 "Proxy %s reached system memory limit (maxsock=%d). Please check system tunables.\n",
+				 be->id, global.maxsock);
+		}
+		else if (errno == EAFNOSUPPORT || errno == EPROTONOSUPPORT) {
+			conn->err_code = CO_ER_NOPROTO;
+		}
+		else
+			conn->err_code = CO_ER_SOCK_ERR;
+
+		// this is a resource error //
+		conn->flags |= CO_FL_ERROR;
+		return SF_ERR_RESOURCE;
+	}*/
+
+	if (fd >= global.maxsock) {
+		/* do not log anything there, it's a normal condition when this option
+		 * is used to serialize connections to a server !
+		 */
+		ha_alert("socket(): not enough free sockets. Raise -n argument. Giving up.\n");
+		close(fd);
+		conn->err_code = CO_ER_CONF_FDLIM;
+		conn->flags |= CO_FL_ERROR;
+		return SF_ERR_PRXCOND; /* it is a configuration limit */
+	}
+
+	if ((fcntl(fd, F_SETFL, O_NONBLOCK)==-1) ||
+	    (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) == -1)) {
+		qfprintf(stderr,"Cannot set client socket to non blocking mode.\n");
+		close(fd);
+		conn->err_code = CO_ER_SOCK_ERR;
+		conn->flags |= CO_FL_ERROR;
+		return SF_ERR_INTERNAL;
+	}
+
+	if (master == 1 && (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1)) {
+		ha_alert("Cannot set CLOEXEC on client socket.\n");
+		close(fd);
+		conn->err_code = CO_ER_SOCK_ERR;
+		conn->flags |= CO_FL_ERROR;
+		return SF_ERR_INTERNAL;
+	}
+
+	if (be->options & PR_O_TCP_SRV_KA)
+		setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+
+	/* allow specific binding :
+	 * - server-specific at first
+	 * - proxy-specific next
+	 */
+	if (srv && srv->conn_src.opts & CO_SRC_BIND)
+		src = &srv->conn_src;
+	else if (be->conn_src.opts & CO_SRC_BIND)
+		src = &be->conn_src;
+	else
+		src = NULL;
+
+	if (src) {
+		int ret, flags = 0;
+
+		if (is_inet_addr(&conn->addr.from)) {
+			switch (src->opts & CO_SRC_TPROXY_MASK) {
+			case CO_SRC_TPROXY_CLI:
+				conn->flags |= CO_FL_PRIVATE;
+				/* fall through */
+			case CO_SRC_TPROXY_ADDR:
+				flags = 3;
+				break;
+			case CO_SRC_TPROXY_CIP:
+			case CO_SRC_TPROXY_DYN:
+				conn->flags |= CO_FL_PRIVATE;
+				flags = 1;
+				break;
+			}
+		}
+
+#ifdef SO_BINDTODEVICE
+		/* Note: this might fail if not CAP_NET_RAW */
+		if (src->iface_name)
+			setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, src->iface_name, src->iface_len + 1);
+#endif
+
+		/*if (src->sport_range) {
+			int attempts = 10; // should be more than enough to find a spare port //
+			struct sockaddr_storage sa;
+
+			ret = 1;
+			memcpy(&sa, &src->source_addr, sizeof(sa));
+
+			do {
+				// note: in case of retry, we may have to release a previously
+				//allocated port, hence this loop's construct.
+				//
+				port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
+				fdinfo[fd].port_range = NULL;
+
+				if (!attempts)
+					break;
+				attempts--;
+
+				fdinfo[fd].local_port = port_range_alloc_port(src->sport_range);
+				if (!fdinfo[fd].local_port) {
+					conn->err_code = CO_ER_PORT_RANGE;
+					break;
+				}
+
+				fdinfo[fd].port_range = src->sport_range;
+				set_host_port(&sa, fdinfo[fd].local_port);
+
+				ret = tcp_bind_socket(fd, flags, &sa, &conn->addr.from);
+				if (ret != 0)
+					conn->err_code = CO_ER_CANT_BIND;
+			} while (ret != 0); // binding NOK //
+		}
+		else {
+#ifdef IP_BIND_ADDRESS_NO_PORT
+			static THREAD_LOCAL int bind_address_no_port = 1;
+			setsockopt(fd, SOL_IP, IP_BIND_ADDRESS_NO_PORT, (const void *) &bind_address_no_port, sizeof(int));
+#endif
+			ret = tcp_bind_socket(fd, flags, &src->source_addr, &conn->addr.from);
+			if (ret != 0)
+				conn->err_code = CO_ER_CANT_BIND;
+		}*/
+
+		/*if (unlikely(ret != 0)) {
+			port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
+			fdinfo[fd].port_range = NULL;
+			close(fd);
+
+			if (ret == 1) {
+				ha_alert("Cannot bind to source address before connect() for backend %s. Aborting.\n",
+					 be->id);
+				send_log(be, LOG_EMERG,
+					 "Cannot bind to source address before connect() for backend %s.\n",
+					 be->id);
+			} else {
+				ha_alert("Cannot bind to tproxy source address before connect() for backend %s. Aborting.\n",
+					 be->id);
+				send_log(be, LOG_EMERG,
+					 "Cannot bind to tproxy source address before connect() for backend %s.\n",
+					 be->id);
+			}
+			conn->flags |= CO_FL_ERROR;
+			return SF_ERR_RESOURCE;
+		}*/
+	}
+
+#if defined(TCP_QUICKACK)
+	/* disabling tcp quick ack now allows the first request to leave the
+	 * machine with the first ACK. We only do this if there are pending
+	 * data in the buffer.
+	 */
+	if (flags & (CONNECT_DELACK_ALWAYS) ||
+	    ((flags & CONNECT_DELACK_SMART_CONNECT ||
+	      (flags & CONNECT_HAS_DATA) || conn->send_proxy_ofs) &&
+	     (be->options2 & PR_O2_SMARTCON)))
+                setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &zero, sizeof(zero));
+#endif
+
+#ifdef TCP_USER_TIMEOUT
+	/* there is not much more we can do here when it fails, it's still minor */
+	if (srv && srv->tcp_ut)
+		setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &srv->tcp_ut, sizeof(srv->tcp_ut));
+#endif
+
+	if (use_fastopen) {
+#if defined(TCP_FASTOPEN_CONNECT)
+                setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN_CONNECT, &one, sizeof(one));
+#endif
+	}
+	if (global.tune.server_sndbuf)
+                setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &global.tune.server_sndbuf, sizeof(global.tune.server_sndbuf));
+
+	if (global.tune.server_rcvbuf)
+                setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &global.tune.server_rcvbuf, sizeof(global.tune.server_rcvbuf));
+
+	addr = (conn->flags & CO_FL_SOCKS4) ? &srv->socks4_addr : &conn->addr.to;
+	conn->flags |= CO_FL_WAIT_L4_CONN;  //??????
+	/*if (connect(fd, (const struct sockaddr *)addr, get_addr_len(addr)) == -1) {
+		if (errno == EINPROGRESS || errno == EALREADY) {
+			// common case, let's wait for connect status //
+			conn->flags |= CO_FL_WAIT_L4_CONN;
+		}
+		else if (errno == EISCONN) {
+			// should normally not happen but if so, indicates that it's OK //
+			conn->flags &= ~CO_FL_WAIT_L4_CONN;
+		}
+		else if (errno == EAGAIN || errno == EADDRINUSE || errno == EADDRNOTAVAIL) {
+			char *msg;
+			if (errno == EAGAIN || errno == EADDRNOTAVAIL) {
+				msg = "no free ports";
+				conn->err_code = CO_ER_FREE_PORTS;
+			}
+			else {
+				msg = "local address already in use";
+				conn->err_code = CO_ER_ADDR_INUSE;
+			}
+
+			qfprintf(stderr,"Connect() failed for backend %s: %s.\n", be->id, msg);
+			port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
+			fdinfo[fd].port_range = NULL;
+			close(fd);
+			send_log(be, LOG_ERR, "Connect() failed for backend %s: %s.\n", be->id, msg);
+			conn->flags |= CO_FL_ERROR;
+			return SF_ERR_RESOURCE;
+		} else if (errno == ETIMEDOUT) {
+			//qfprintf(stderr,"Connect(): ETIMEDOUT");
+			port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
+			fdinfo[fd].port_range = NULL;
+			close(fd);
+			conn->err_code = CO_ER_SOCK_ERR;
+			conn->flags |= CO_FL_ERROR;
+			return SF_ERR_SRVTO;
+		} else {
+			// (errno == ECONNREFUSED || errno == ENETUNREACH || errno == EACCES || errno == EPERM)
+			//qfprintf(stderr,"Connect(): %d", errno);
+			port_range_release_port(fdinfo[fd].port_range, fdinfo[fd].local_port);
+			fdinfo[fd].port_range = NULL;
+			close(fd);
+			conn->err_code = CO_ER_SOCK_ERR;
+			conn->flags |= CO_FL_ERROR;
+			return SF_ERR_SRVCL;
+		}
+	}
+	else {
+		// connect() == 0, this is great!//
+		conn->flags &= ~CO_FL_WAIT_L4_CONN;
+	}*/
+
+	conn->flags |= CO_FL_ADDR_TO_SET;
+
+	conn_ctrl_init(conn);       /* registers the FD */
+	fdtab[fd].linger_risk = 1;  /* close hard if needed */
+
+	if (conn_xprt_init(conn) < 0) {
+		conn_full_close(conn);
+		conn->flags |= CO_FL_ERROR;
+		return SF_ERR_RESOURCE;
+	}
+
+	conn_xprt_want_send(conn);  /* for connect status, proxy protocol or SSL */
+	return SF_ERR_NONE;  /* connection is OK */
+}
 
 /*
  * Retrieves the source address for the socket <fd>, with <dir> indicating
@@ -1111,7 +1414,7 @@ int tcp_bind_listener(struct listener *listener, char *errmsg, int errlen)
 
 #if ENABLE_CUJU_FT
 	if(listener->bind_conf->cujuipc_idx)
-		listener->cujuipc_idx = listener->bind_conf->cujuipc_idx;
+		listener->cujuipc_idx = listener->bind_conf->cujuipc_idx;	
 #endif
 
 	fd_insert(fd, listener, listener->proto->accept,

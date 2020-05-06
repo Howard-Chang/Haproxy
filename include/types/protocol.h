@@ -74,6 +74,8 @@ struct protocol {
 	int (*enable_all)(struct protocol *proto);	/* enable all bound listeners */
 	int (*disable_all)(struct protocol *proto);	/* disable all bound listeners */
 	int (*connect)(struct connection *, int flags); /* connect function if any, see below for flags values */
+	int (*connect_ft)(struct connection *, int flags); /* connect function trigger for backup proxy backend */
+	
 	int (*get_src)(int fd, struct sockaddr *, socklen_t, int dir); /* syscall used to retrieve src addr */
 	int (*get_dst)(int fd, struct sockaddr *, socklen_t, int dir); /* syscall used to retrieve dst addr */
 	int (*drain)(int fd);                           /* indicates whether we can safely close the fd */

@@ -677,7 +677,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 		if (err_code & ERR_FATAL)
 			goto out;
 	}
-	else if (!strcmp(args[0], "bind") || !strcmp(args[0], "cuju-ipc")) {  /* new listen addresses */
+	else if (!strcmp(args[0], "bind") || !strcmp(args[0], "cuju-ipc") || !strcmp(args[0], "trigger-backend") || !strcmp(args[0], "backup")) {  /* new listen addresses */
 		struct listener *l;
 		int cur_arg;
 
@@ -706,6 +706,9 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 #if ENABLE_CUJU_FT
 		if(!strcmp(args[0], "cuju-ipc")) {
 			bind_conf->cujuipc_idx = 1;
+		}
+		if(!strcmp(args[0], "trigger-backend")) {
+			bind_conf->trigger_backend = 1;
 		}
 #endif
 
