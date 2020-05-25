@@ -126,6 +126,7 @@
 #include <proto/session.h>
 #include <proto/stream.h>
 #include <proto/signal.h>
+#include <signal.h>
 #include <proto/task.h>
 #include <proto/dns.h>
 #include <proto/vars.h>
@@ -340,6 +341,16 @@ struct per_thread_deinit_fct {
 /* used to register some build option strings at boot. Set must_free to
  * non-zero if the string must be freed upon exit.
  */
+
+void no_ft_trigger(int signum)
+{
+    if (signum == SIGUSR2)
+    {
+        printf("Received SIGUSR2  Enter No FT mode!\n");
+    }
+}
+
+
 void hap_register_build_opts(const char *str, int must_free)
 {
 	struct build_opts_str *b;
@@ -730,7 +741,7 @@ static void mworker_loop()
 
 	master = 1;
 
-	signal_unregister(SIGUSR1);
+	//signal_unregister(SIGUSR1);
 	signal_unregister(SIGHUP);
 	signal_unregister(SIGQUIT);
 
@@ -738,7 +749,7 @@ static void mworker_loop()
 	signal_register_fct(SIGUSR1, mworker_catch_sigterm, SIGUSR1);
 	signal_register_fct(SIGINT, mworker_catch_sigterm, SIGINT);
 	signal_register_fct(SIGHUP, mworker_catch_sighup, SIGHUP);
-	signal_register_fct(SIGUSR2, mworker_catch_sighup, SIGUSR2);
+	//signal_register_fct(SIGUSR2, mworker_catch_sighup, SIGUSR2);
 	signal_register_fct(SIGCHLD, mworker_catch_sigchld, SIGCHLD);
 
 	mworker_unblock_signals();
@@ -2850,7 +2861,7 @@ void *pri_proxy_conn(void *arg)
                         break;
                     }
 
-					dt_info* data = get_dump_info(accp_fd);
+					struct dt_info* data = get_dump_info(accp_fd);
 					print_info(data);
 
 					int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -2944,7 +2955,7 @@ void *pri_proxy_conn(void *arg)
 
     }
 }
-static int restore_tcp_conn_state_HA(int fd, struct libsoccr_sk *socr, dt_info* data, int is_cfd)
+static int restore_tcp_conn_state_HA(int fd, struct libsoccr_sk *socr, struct dt_info* data, int is_cfd)
 {
 	int aux;
 	union libsoccr_addr sa_src, sa_dst;
@@ -2952,26 +2963,26 @@ static int restore_tcp_conn_state_HA(int fd, struct libsoccr_sk *socr, dt_info* 
 	struct sockaddr_in clinetaddr,serveraddr;
 	if(is_cfd)		//for frontend fd
 	{
-		client_addr = &data->sk_hd.src_addr;
-		client_port = data->sk_hd.src_port; 
+		client_addr = &data->sk_addr.src_addr;
+		client_port = data->sk_addr.src_port; 
 		if (restore_sockaddr_HA(&sa_src,
-				AF_INET, data->sk_hd.dst_port, 
-				&data->sk_hd.dst_addr, 0) < 0)	
+				AF_INET, data->sk_addr.dst_port, 
+				&data->sk_addr.dst_addr, 0) < 0)	
 		goto err;
 		if (restore_sockaddr_HA(&sa_dst,
-					AF_INET, data->sk_hd.src_port,		
-					&data->sk_hd.src_addr, 0) < 0)		
+					AF_INET, data->sk_addr.src_port,		
+					&data->sk_addr.src_addr, 0) < 0)		
 		goto err;
 	}
 	else			//for backend fd
 	{
 		if (restore_sockaddr_HA(&sa_src,
-				AF_INET, data->sk_hd.src_port, 
-				&data->sk_hd.src_addr, 0) < 0)	
+				AF_INET, data->sk_addr.src_port, 
+				&data->sk_addr.src_addr, 0) < 0)	
 		goto err;
 		if (restore_sockaddr_HA(&sa_dst,
-					AF_INET, data->sk_hd.dst_port,		
-					&data->sk_hd.dst_addr, 0) < 0)		
+					AF_INET, data->sk_addr.dst_port,		
+					&data->sk_addr.dst_addr, 0) < 0)		
 		goto err;
 	}
 
@@ -2986,7 +2997,7 @@ static int restore_tcp_conn_state_HA(int fd, struct libsoccr_sk *socr, dt_info* 
 err:
 	return -1;
 }
-int restore_one_tcp_HA(int fd, dt_info* data, int is_cfd)
+int restore_one_tcp_HA(int fd, struct dt_info* data, int is_cfd)
 {
 	struct libsoccr_sk *sk;
 
@@ -3019,7 +3030,7 @@ int main(int argc, char **argv)
 
 	pthread_t ipc, tid;
 	pthread_create(&ipc, NULL, ipc_handler, "Child");
-	
+	signal(SIGUSR2, no_ft_trigger);
 	if(!global.is_primary)
 	{
 		if( pthread_create(&tid, NULL, pri_proxy_conn, (void*) &dump_cfd) != 0 )		
@@ -3162,9 +3173,9 @@ int main(int argc, char **argv)
 
 	init(argc, argv);
 	signal_register_fct(SIGQUIT, dump, SIGQUIT);
-	signal_register_fct(SIGUSR1, sig_soft_stop, SIGUSR1);
+	//signal_register_fct(SIGUSR1, sig_soft_stop, SIGUSR1);
 	signal_register_fct(SIGHUP, sig_dump_state, SIGHUP);
-	signal_register_fct(SIGUSR2, NULL, 0);
+	//signal_register_fct(SIGUSR2, NULL, 0);
 
 	/* Always catch SIGPIPE even on platforms which define MSG_NOSIGNAL.
 	 * Some recent FreeBSD setups report broken pipes, and MSG_NOSIGNAL

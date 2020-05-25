@@ -35,7 +35,7 @@ DECLARE_POOL(pool_head_sess_srv_list, "session server list",
 
 static int conn_complete_session(struct connection *conn);
 static struct task *session_expire_embryonic(struct task *t, void *context, unsigned short state);
-
+int frontend_fd;
 /* Create a a new session and assign it to frontend <fe>, listener <li>,
  * origin <origin>, set the current date and clear the stick counters pointers.
  * Returns the session upon success or NULL. The session may be released using
@@ -44,8 +44,8 @@ static struct task *session_expire_embryonic(struct task *t, void *context, unsi
 static void send_backend_fd(int a)
 {
 	struct libsoccr_sk_data* data = calloc(1, sizeof(struct libsoccr_sk_data));
-	prefix *pre = calloc(1, sizeof(*pre));
-	dt_info *buf;
+	struct sk_prefix *pre = calloc(1, sizeof(*pre));
+	struct dt_info *buf;
 	save_sk_header(pre, 1);
     int proxy_dt_fd = conn_to_backup_proxy();
 	dump_send(backend_fd, proxy_dt_fd, data, pre, buf);
@@ -354,9 +354,10 @@ int session_accept_fd(struct listener *l, int cfd, struct sockaddr_storage *addr
 
 	if(global.is_primary && state == 1)
 	{
+		frontend_fd = cfd;
 		struct libsoccr_sk_data* data = calloc(1, sizeof(struct libsoccr_sk_data));
-		prefix *pre = calloc(1, sizeof(*pre));
-		dt_info *buf;
+		struct sk_prefix *pre = calloc(1, sizeof(*pre));
+		struct dt_info *buf;
 		save_sk_header(pre, 1);
 		struct itimerval t;
 		t.it_interval.tv_usec = 0;
@@ -371,6 +372,7 @@ int session_accept_fd(struct listener *l, int cfd, struct sockaddr_storage *addr
 
 		signal( SIGALRM, send_backend_fd );
 		int proxy_dt_fd = conn_to_backup_proxy();
+		printf("cfd:%d      ************\n", cfd);
 		dump_send(cfd, proxy_dt_fd, data, pre, buf);
 	}
 

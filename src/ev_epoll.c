@@ -29,10 +29,11 @@
 #include <proto/fd.h>
 #include <proto/signal.h>
 
+#include <types/tcp_repair.h>
 #include <types/cuju_ft.h>
 #include <types/cuju_ft_def.h>
 
-#define DEBUG_EPOLL 0
+#define DEBUG_EPOLL 1
 #if DEBUG_EPOLL
 #define EPOLLPRINTF(x...) printf(x)
 #else
@@ -120,7 +121,7 @@ REGPRM3 static void _do_poll(struct poller *p, int exp, int wake)
 	int updt_idx;
 	int wait_time;
 	int old_fd;
-
+	static int cnt = 0;
 #if ENABLE_EPOLL_MIGRATION
 	static unsigned long pb_cnt = 0;
 #endif
@@ -140,6 +141,7 @@ REGPRM3 static void _do_poll(struct poller *p, int exp, int wake)
 	fd_nbupdt = 0;
 	/* Scan the global update list */
 	for (old_fd = fd = update_list.first; fd != -1; fd = fdtab[fd].update.next) {
+		printf("$$$$$$$$$$$$$$$$$$$$$$$$$\n");
 		if (fd == -2) {
 			fd = old_fd;
 			continue;
@@ -213,7 +215,7 @@ REGPRM3 static void _do_poll(struct poller *p, int exp, int wake)
 		unsigned int n;
 		unsigned int e = epoll_events[count].events;
 		fd = epoll_events[count].data.fd;
-
+		printf("epoll~~~~~~~~~~~fd:%d", fd);
 		if (!fdtab[fd].owner) {
 			activity[tid].poll_dead++;
 			continue;
@@ -249,6 +251,16 @@ REGPRM3 static void _do_poll(struct poller *p, int exp, int wake)
 			_HA_ATOMIC_OR(&cur_poller.flags, HAP_POLL_F_RDHUP);
 			n |= FD_POLL_HUP;
 		}
+		/*if(fd == backend_fd || fd == frontend_fd)
+		{
+			if (tcp_repair_on(fd) < 0) {
+        		printf("tcp_repair_on fail.\n");
+        		return;
+    		}
+			close(fd);
+		}*/
+			//fd_release_cache_entry(fd);
+			//fd_stop_both(fd);
 		fd_update_events(fd, n);
 	}
 	/* the caller will take care of cached events */

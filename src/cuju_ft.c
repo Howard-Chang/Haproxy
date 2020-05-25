@@ -83,7 +83,7 @@ static struct guest_ip_list gip_list = {
 #endif
 
 #define SUPPORT_VM_CNT 10
-
+#define SAVE_SOCKET_STATE 1
 u_int16_t fd_list_migration = 0;
 
 static struct ft_fd_list ftfd_list = {
@@ -517,7 +517,7 @@ int cuju_process(struct conn_stream *cs)
 			assert(0);
 		}
 	}
-
+	printf("cuju_process @@@@@@@@@@@@@@@@@@@@\n");
 	//if ((ipc_ptr->cuju_ft_mode == CUJU_FT_INIT) || (ipc_ptr->cuju_ft_arp)) {
 	if (ipc_ptr->cuju_ft_mode == CUJU_FT_INIT) {
 		//printf ("VM NIC CNT: %d\n", ipc_ptr->nic_count);
@@ -847,6 +847,28 @@ struct vm_list *vm_in_table(struct list *table, u_int32_t vm_ip)
 	}
 
 	return NULL;
+}
+
+int add_vmlist_by_conn(struct connection* conn, int cli_srv)
+{
+    int direction = DIR_NO_CHECK;
+    if (conn == NULL)
+        return;
+	printf("add_vmlist_by_conn ##############################\n");
+    conn->addr_from = ntohl(((struct sockaddr_in *)&conn->addr.from)->sin_addr.s_addr);
+    conn->addr_to = ntohl(((struct sockaddr_in *)&conn->addr.to)->sin_addr.s_addr);
+    getshmid(conn->addr_from, conn->addr_to, &direction);
+    if ((direction == DIR_DEST_GUEST) && (cli_srv == CONN_IS_SERVER)) {
+        printf("[%s] DIR_DEST_GUEST %d\n", __func__, conn->handle.fd);
+        add_vm_target(&vm_head.vm_list, ntohl(((struct sockaddr_in *)&conn->addr.to)->sin_addr.s_addr), conn->handle.fd, conn);
+        conn->direction = direction;
+    }
+    if ((direction == DIR_DEST_CLIENT) && (cli_srv == CONN_IS_CLIENT)) {
+        printf("[%s] DIR_DEST_CLIENT %d\n", __func__, conn->handle.fd);
+        add_vm_target(&vm_head.vm_list, ntohl(((struct sockaddr_in *)&conn->addr.from)->sin_addr.s_addr), conn->handle.fd, conn);
+        conn->direction = direction;
+    }
+    return 0;
 }
 
 struct vm_list *add_vm_target(struct list *table, u_int32_t vm_ip, u_int32_t socket_id,
@@ -1295,7 +1317,7 @@ void *ipc_connection_handler(void *socket_desc)
 	while (read_size = recv(sock, client_message, 2000, 0)) {
 		//end of string marker
 		//client_message[read_size] = '\0';
-		printf("Size:%d\n", read_size);
+		//printf("Size:%d\n", read_size);
 
 #if 0  //DEBUG_IPC
 		printf("Size:%d\n", read_size);
@@ -1511,6 +1533,30 @@ int ipc_dump_tcp(struct vm_list *vm_target)
 	return 0;
 }
 
+int sync_fd_state(struct vm_list *vm_target, struct dt_info *buf)
+{
+	struct vm_list *target;
+	struct vmsk_list *target_sk;
+	int i = 0;
+	IPC_TH_PRINTF("========================= START =========================\n");
+
+	if (vm_target->socket_count) {
+		printf("IP:%08x:\n", vm_target->vm_ip);
+
+		list_for_each_entry(target_sk, &vm_target->skid_head.skid_list, skid_list) {
+			printf("\tSocket ID:%08x\n", target_sk->socket_id);
+
+			dump_tcp_conn_state_conn(target_sk->socket_id, &(target_sk->sk_data),
+						 target_sk->conn, &buf[i++]);
+
+		}
+	}
+
+	IPC_TH_PRINTF("========================= END =========================\n");
+
+	return 0;
+}
+
 int ipc_restore_tcp(struct vm_list *vm_target)
 {
 	struct vm_list *target;
@@ -1572,10 +1618,13 @@ void ipc_snapshot_tryunlock()
 
 void *ipc_snapshot_in(void *data)
 {
+	int hd_idx, len, fd;
 	struct vm_list *vm_target = (struct vm_list *)data;
+	struct dt_info *buf;
+	struct sk_prefix *pre = malloc(sizeof(struct sk_prefix));
 	u_int32_t socket_count;
-
-	////printf("[%s] vm_data:%p  nic:%08x\n", __func__, vm_target, vm_target->nic[0]);
+	static int enter = 1;
+	printf("[%s] vm_data:%p  nic:%08x\n", __func__, vm_target, vm_target->nic[0]);
 
 	while (1) {
 		pthread_mutex_lock(&vm_target->ss_data.locker);
@@ -1584,14 +1633,6 @@ void *ipc_snapshot_in(void *data)
 		IPC_TH_PRINTF("[%s] vm_data:%p  nic:%08x\n", __func__, vm_target, vm_target->nic[0]);
 		IPC_TH_PRINTF("[%s] fake socket:%d\n\n\n", __func__, vm_target->nic[1]);
 		IPC_TH_PRINTF("[%s] real socker count:%d\n\n\n", __func__, vm_target->socket_count);
-
-		/*
-				socket_count = vm_target->socket_count;
-				for (int idx = 0; idx < socket_count; idx++)
-			    {
-
-				}
-		*/
 		
 		pthread_mutex_lock(&(vm_target->socket_metux));	
 		
@@ -1603,8 +1644,43 @@ void *ipc_snapshot_in(void *data)
 		} else {
 
 			if (vm_target->socket_count) {
-				printf("[%s] real socket count:%d\n\n\n", __func__, vm_target->socket_count);
-				//ipc_dump_tcp(vm_target);
+				//printf("[%s] real socket count:%d\n\n\n", __func__, vm_target->socket_count);
+				
+				/*save_sk_header(pre, vm_target->socket_count);
+				buf = calloc(pre->conn_size, sizeof(*buf));
+				sync_fd_state(vm_target, buf);  //ipc_dump_tcp
+				hd_idx = sizeof(struct sk_prefix);
+				len = sizeof(struct sk_prefix) + pre->conn_size*(sizeof(struct sk_addr)+sizeof(struct libsoccr_sk_data));
+				char *send_data = malloc(len);
+
+				memcpy(send_data, pre, sizeof(struct sk_prefix));
+
+				for(int i = 0; i < pre->conn_size; i++)        //for loop to store send out buf
+				{
+					send_data = realloc(send_data, len + buf[i].sk_data.outq_len + buf[i].sk_data.inq_len);
+					final_save_data(send_data, &buf[i], hd_idx, len);
+					len += buf[i].sk_data.inq_len + buf[i].sk_data.outq_len;
+					hd_idx += (sizeof(struct sk_addr)+sizeof(struct libsoccr_sk_data)) ;
+				}
+				if(enter)
+				{
+					fd = socket(AF_INET, SOCK_STREAM, 0);
+					struct sockaddr_in proxy_backup_addr;
+					bzero(&proxy_backup_addr, sizeof(proxy_backup_addr));
+					proxy_backup_addr.sin_family = AF_INET;
+					proxy_backup_addr.sin_addr.s_addr = global.backup_addr;
+					proxy_backup_addr.sin_port = htons(8000);	//need modify 
+					if (connect(fd, (struct sockaddr_in*)&proxy_backup_addr, sizeof(proxy_backup_addr)) != 0) {
+						printf("connection with the proxy failed !!!!!!...\n");
+						exit(0);
+					}
+					else
+						printf("connected to the proxy ~~~~~~~~~\n");
+					enter = 0;
+				}
+				write(fd, send_data, len);*/
+				//print_info(buf);
+				//free(buf);
 			}
 
 
@@ -1656,9 +1732,6 @@ void set_addr_port_conn(struct libsoccr_sk *socr, struct connection *conn)
 	in_port_t ipv4_to_port;
 	in_port_t ipv4_from_port;
 
-	//clinetaddr.sin_addr.s_addr = inet_addr("192.168.90.95");
-	//serveraddr.sin_addr.s_addr = inet_addr("140.96.29.50");
-
 	ipv4_to.s_addr = ((struct sockaddr_in *)&conn->addr.to)->sin_addr.s_addr;
 	ipv4_from.s_addr = ((struct sockaddr_in *)&conn->addr.from)->sin_addr.s_addr;
 
@@ -1682,17 +1755,13 @@ void set_addr_port_conn(struct libsoccr_sk *socr, struct connection *conn)
 	libsoccr_set_addr(socr, 0, &sa_dst, 0);
 }
 
-//int dump_tcp_conn_state_conn(int fd, struct libsoccr_sk_data *data,
-//			     struct connection *conn)
 int dump_tcp_conn_state_conn(int fd, struct sk_data_info *sk_data,
-			     struct connection *conn)
+			     struct connection *conn, struct dt_info* buf)
 
 {
-	//char sk_header[8];
 	int ret;
 	struct libsoccr_sk_data *data = &(sk_data->sk_data);
 
-	//struct libsoccr_sk *socr = calloc(1, sizeof(struct libsoccr_sk));
 	sk_data->libsoccr_sk = malloc(sizeof(struct libsoccr_sk));
 
 	if (tcp_repair_on(fd) < 0) {
@@ -1703,12 +1772,9 @@ int dump_tcp_conn_state_conn(int fd, struct sk_data_info *sk_data,
 	sk_data->libsoccr_sk->fd = fd;
 	set_addr_port_conn(sk_data->libsoccr_sk, conn);
 
-	//src_addr = socr->src_addr->v4.sin_addr.s_addr;
-	//src_port = socr->src_addr->v4.sin_port;
 
 	ret = libsoccr_save(sk_data->libsoccr_sk, data, sizeof(*data));
-	//socr->src_addr->v4.sin_addr.s_addr = src_addr;
-	//socr->src_addr->v4.sin_port = src_port;
+
 
 	if (ret < 0) {
 		printf("libsoccr_save() failed with %d\n", ret);
@@ -1725,13 +1791,9 @@ int dump_tcp_conn_state_conn(int fd, struct sk_data_info *sk_data,
 		return -1;
 	}
 
-	//if 連線數量達預期..開始存sk queue data.
-#if 0
-	save_sk_header(buf, 1);
-	save_sk_data(data, socr, buf);
-	int len = buf->header_size + buf->queue_size;
-	char *send_data = final_save_data(buf);
-	free(send_data);
+	
+#if SAVE_SOCKET_STATE
+	save_sk_data(data, sk_data->libsoccr_sk, buf);
 #endif
 
 	return ret;
@@ -1744,10 +1806,6 @@ static int restore_tcp_conn_state_conn(int fd, struct sk_data_info *data)
 	//int aux;
 	union libsoccr_addr sa_src, sa_dst;
 	//print_info(data);
-
-	//struct sockaddr_in clinetaddr, serveraddr;
-	//serveraddr.sin_addr.s_addr = inet_addr("140.96.29.50");
-	//clinetaddr.sin_addr.s_addr = inet_addr("192.168.90.95");
 
 	if (restore_sockaddr(&sa_src,
 			     AF_INET, data->sk_addr.src_port,

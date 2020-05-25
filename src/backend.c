@@ -1675,7 +1675,35 @@ int connect_server(struct stream *s)
 #endif /* USE_OPENSSL */
 
 	}
+	printf("cli_conn->handle.fd:%d \n", cli_conn->handle.fd);
+	printf("srv_conn->handle.fd:%d \n", srv_conn->handle.fd);
+	
+	/*struct sockaddr_storage to, from;
+	struct sockaddr_in connectedAddr, peerAddr;
+	int connectedAddrLen, peerLen;
+	connectedAddrLen = sizeof(connectedAddr);  
+	peerLen = sizeof(peerAddr);
+	getsockname(srv_conn->handle.fd, (struct sockaddr *)&connectedAddr, &connectedAddrLen);
+	getpeername(srv_conn->handle.fd, (struct sockaddr *)&peerAddr, &peerLen); 
+	memcpy(&to, (struct sockaddr_storage*)&peerAddr, sizeof(struct sockaddr_storage));
+	memcpy(&from, (struct sockaddr_storage*)&connectedAddr, sizeof(struct sockaddr_storage));
 
+	printf("connected to address = %s:%d\n", inet_ntoa(((struct sockaddr_in*)&to)->sin_addr), ntohs(((struct sockaddr_in*)&to)->sin_port));
+	printf("connected from address = %s:%d\n", inet_ntoa(((struct sockaddr_in*)&from)->sin_addr), ntohs(((struct sockaddr_in*)&from)->sin_port));
+
+
+	getsockname(cli_conn->handle.fd, (struct sockaddr *)&connectedAddr, &connectedAddrLen);
+	getpeername(cli_conn->handle.fd, (struct sockaddr *)&peerAddr, &peerLen); 
+	memcpy(&to, (struct sockaddr_storage*)&peerAddr, sizeof(struct sockaddr_storage));
+	memcpy(&from, (struct sockaddr_storage*)&connectedAddr, sizeof(struct sockaddr_storage));
+
+	printf("connected to address = %s:%d\n", inet_ntoa(((struct sockaddr_in*)&to)->sin_addr), ntohs(((struct sockaddr_in*)&to)->sin_port));
+	printf("connected from address = %s:%d\n", inet_ntoa(((struct sockaddr_in*)&from)->sin_addr), ntohs(((struct sockaddr_in*)&from)->sin_port));
+	*/
+	#if USING_TCP_REPAIR
+    add_vmlist_by_conn(srv_conn, CONN_IS_SERVER);
+    add_vmlist_by_conn(cli_conn, CONN_IS_CLIENT);
+	#endif
 	return SF_ERR_NONE;  /* connection is OK */
 }
 

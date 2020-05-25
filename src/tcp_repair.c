@@ -547,7 +547,7 @@ int libsoccr_restore_conn(struct sk_data_info* data,
 }
 
 /*******************TCP repair by Howard****************/
-void free_buf(dt_info* buf)
+void free_buf(struct dt_info* buf)
 {
     free(buf->recv_queue);
     free(buf->send_queue);
@@ -569,7 +569,7 @@ int restore_sockaddr_HA(union libsoccr_addr *sa,
 }
 
 int libsoccr_set_sk_data_noq_HA(struct libsoccr_sk *sk,
-		dt_info *data, unsigned data_size)
+		struct dt_info *data, unsigned data_size)
 {
 	struct tcp_repair_opt opts[4];
 	int addr_size, mstate;
@@ -586,9 +586,9 @@ int libsoccr_set_sk_data_noq_HA(struct libsoccr_sk *sk,
 		return -1;
 	}
 
-	mstate = 1 << data->sk_hd.state;
+	mstate = 1 << data->sk_data.state;
 
-	if (data->sk_hd.state == TCP_LISTEN) {
+	if (data->sk_data.state == TCP_LISTEN) {
 		printf("Unable to handle listen sockets\n");
 		return -1;
 	}
@@ -604,18 +604,18 @@ int libsoccr_set_sk_data_noq_HA(struct libsoccr_sk *sk,
 	}
 
 	if (mstate & (RCVQ_FIRST_FIN | RCVQ_SECOND_FIN))
-		data->sk_hd.inq_seq--;
+		data->sk_data.inq_seq--;
 
 	/* outq_seq is adjusted due to not accointing the fin packet */
 	if (mstate & (SNDQ_FIRST_FIN | SNDQ_SECOND_FIN))
-		data->sk_hd.outq_seq--;
+		data->sk_data.outq_seq--;
 
 	if (set_queue_seq(sk, TCP_RECV_QUEUE,
-				data->sk_hd.inq_seq - data->sk_hd.inq_len))
+				data->sk_data.inq_seq - data->sk_data.inq_len))
 		return -2;
 
-	seq = data->sk_hd.outq_seq - data->sk_hd.outq_len;
-	if (data->sk_hd.state == TCP_SYN_SENT)
+	seq = data->sk_data.outq_seq - data->sk_data.outq_len;
+	if (data->sk_data.state == TCP_SYN_SENT)
 		seq--;
 
 	if (set_queue_seq(sk, TCP_SEND_QUEUE, seq))
@@ -626,7 +626,7 @@ int libsoccr_set_sk_data_noq_HA(struct libsoccr_sk *sk,
 	else
 		addr_size = sizeof(sk->dst_addr->v6);
 
-	if (data->sk_hd.state == TCP_SYN_SENT && tcp_repair_off(sk->fd))
+	if (data->sk_data.state == TCP_SYN_SENT && tcp_repair_off(sk->fd))
 		return -1;
 
 	if (connect(sk->fd, &sk->dst_addr->sa, addr_size) == -1 &&
@@ -635,48 +635,48 @@ int libsoccr_set_sk_data_noq_HA(struct libsoccr_sk *sk,
 		return -1;
 	}
 
-	if (data->sk_hd.state == TCP_SYN_SENT && tcp_repair_on(sk->fd))
+	if (data->sk_data.state == TCP_SYN_SENT && tcp_repair_on(sk->fd))
 		return -1;
 
 	printf("\tRestoring TCP options\n");
 
-	if (data->sk_hd.opt_mask & TCPI_OPT_SACK) {
+	if (data->sk_data.opt_mask & TCPI_OPT_SACK) {
 		printf("\t\tWill turn SAK on\n");
 		opts[onr].opt_code = TCPOPT_SACK_PERM;
 		opts[onr].opt_val = 0;
 		onr++;
 	}
 
-	if (data->sk_hd.opt_mask & TCPI_OPT_WSCALE) {
-		printf("\t\tWill set snd_wscale to %u\n", data->sk_hd.snd_wscale);
-		printf("\t\tWill set rcv_wscale to %u\n", data->sk_hd.rcv_wscale);
+	if (data->sk_data.opt_mask & TCPI_OPT_WSCALE) {
+		printf("\t\tWill set snd_wscale to %u\n", data->sk_data.snd_wscale);
+		printf("\t\tWill set rcv_wscale to %u\n", data->sk_data.rcv_wscale);
 		opts[onr].opt_code = TCPOPT_WINDOW;
-		opts[onr].opt_val = data->sk_hd.snd_wscale + (data->sk_hd.rcv_wscale << 16);
+		opts[onr].opt_val = data->sk_data.snd_wscale + (data->sk_data.rcv_wscale << 16);
 		onr++;
 	}
 
-	if (data->sk_hd.opt_mask & TCPI_OPT_TIMESTAMPS) {
+	if (data->sk_data.opt_mask & TCPI_OPT_TIMESTAMPS) {
 		printf("\t\tWill turn timestamps on\n");
 		opts[onr].opt_code = TCPOPT_TIMESTAMP;
 		opts[onr].opt_val = 0;
 		onr++;
 	}
 
-	printf("Will set mss clamp to %u\n", data->sk_hd.mss_clamp);
+	printf("Will set mss clamp to %u\n", data->sk_data.mss_clamp);
 	opts[onr].opt_code = TCPOPT_MAXSEG;
-	opts[onr].opt_val = data->sk_hd.mss_clamp;
+	opts[onr].opt_val = data->sk_data.mss_clamp;
 	onr++;
 
-	if (data->sk_hd.state != TCP_SYN_SENT &&
+	if (data->sk_data.state != TCP_SYN_SENT &&
 	    setsockopt(sk->fd, SOL_TCP, TCP_REPAIR_OPTIONS,
 				opts, onr * sizeof(struct tcp_repair_opt)) < 0) {
 		printf("Can't repair options");
 		return -2;
 	}
 
-	if (data->sk_hd.opt_mask & TCPI_OPT_TIMESTAMPS) {
+	if (data->sk_data.opt_mask & TCPI_OPT_TIMESTAMPS) {
 		if (setsockopt(sk->fd, SOL_TCP, TCP_TIMESTAMP,
-				&data->sk_hd.timestamp, sizeof(data->sk_hd.timestamp)) < 0) {
+				&data->sk_data.timestamp, sizeof(data->sk_data.timestamp)) < 0) {
 			logerr("Can't set timestamp");
 			return -3;
 		}
@@ -685,7 +685,7 @@ int libsoccr_set_sk_data_noq_HA(struct libsoccr_sk *sk,
 	return 0;
 }
 
-int libsoccr_restore_queue_HAProxy(struct libsoccr_sk *sk, dt_info *data, unsigned data_size,
+int libsoccr_restore_queue_HAProxy(struct libsoccr_sk *sk, struct dt_info *data, unsigned data_size,
 		int queue, char *buf)
 {
 	if (!buf)
@@ -695,9 +695,9 @@ int libsoccr_restore_queue_HAProxy(struct libsoccr_sk *sk, dt_info *data, unsign
 		return -1;
 
 	if (queue == TCP_RECV_QUEUE) {
-		if (!data->sk_hd.inq_len)
+		if (!data->sk_data.inq_len)
 			return 0;
-		return send_queue(sk, TCP_RECV_QUEUE, buf, data->sk_hd.inq_len);
+		return send_queue(sk, TCP_RECV_QUEUE, buf, data->sk_data.inq_len);
 	}
 
 	if (queue == TCP_SEND_QUEUE) {
@@ -710,8 +710,8 @@ int libsoccr_restore_queue_HAProxy(struct libsoccr_sk *sk, dt_info *data, unsign
 		 * acknowledgment can be received for them. These data must be
 		 * restored in repair mode.
 		 */
-		ulen = data->sk_hd.unsq_len;
-		len = data->sk_hd.outq_len - ulen;
+		ulen = data->sk_data.unsq_len;
+		len = data->sk_data.outq_len - ulen;
 		if (len && send_queue(sk, TCP_SEND_QUEUE, buf, len))
 			return -2;
 
@@ -733,7 +733,7 @@ int libsoccr_restore_queue_HAProxy(struct libsoccr_sk *sk, dt_info *data, unsign
 	return -5;
 }
 
-int send_fin_HAProxy(struct libsoccr_sk *sk, dt_info *data,
+int send_fin_HAProxy(struct libsoccr_sk *sk, struct dt_info *data,
 		unsigned data_size, uint8_t flags)
 {
 	uint32_t src_v4 = sk->src_addr->v4.sin_addr.s_addr;
@@ -775,10 +775,10 @@ int send_fin_HAProxy(struct libsoccr_sk *sk, dt_info *data,
 	ret = libnet_build_tcp(
 		ntohs(sk->dst_addr->v4.sin_port),		/* source port */
 		ntohs(sk->src_addr->v4.sin_port),		/* destination port */
-		data->sk_hd.inq_seq,			/* sequence number */
-		data->sk_hd.outq_seq - data->sk_hd.outq_len,	/* acknowledgement num */
+		data->sk_data.inq_seq,			/* sequence number */
+		data->sk_data.outq_seq - data->sk_data.outq_len,	/* acknowledgement num */
 		flags,				/* control flags */
-		data->sk_hd.rcv_wnd,			/* window size */
+		data->sk_data.rcv_wnd,			/* window size */
 		0,				/* checksum */
 		10,				/* urgent pointer */
 		LIBNET_TCP_H + 20,		/* TCP packet size */
@@ -845,9 +845,9 @@ err:
 }
 
 int libsoccr_restore_HA(struct libsoccr_sk *sk,
-		dt_info* data, unsigned data_size)
+		struct dt_info* data, unsigned data_size)
 {
-	int mstate = 1 << data->sk_hd.state;
+	int mstate = 1 << data->sk_data.state;
 
 	if (libsoccr_set_sk_data_noq_HA(sk, data, data_size))
 		return -1;
@@ -859,13 +859,13 @@ int libsoccr_restore_HA(struct libsoccr_sk *sk,
 	if (libsoccr_restore_queue_HAProxy(sk, data, sizeof(*data), TCP_SEND_QUEUE, data->send_queue))
 		return -1;
 
-	if (data->sk_hd.flags & SOCCR_FLAGS_WINDOW) {
+	if (data->sk_data.flags & SOCCR_FLAGS_WINDOW) {
 		struct tcp_repair_window wopt = {
-			.snd_wl1 = data->sk_hd.snd_wl1,
-			.snd_wnd = data->sk_hd.snd_wnd,
-			.max_window = data->sk_hd.max_window,
-			.rcv_wnd = data->sk_hd.rcv_wnd,
-			.rcv_wup = data->sk_hd.rcv_wup,
+			.snd_wl1 = data->sk_data.snd_wl1,
+			.snd_wnd = data->sk_data.snd_wnd,
+			.max_window = data->sk_data.max_window,
+			.rcv_wnd = data->sk_data.rcv_wnd,
+			.rcv_wup = data->sk_data.rcv_wup,
 		};
 
 		if (mstate & (RCVQ_FIRST_FIN | RCVQ_SECOND_FIN)) {
@@ -897,10 +897,10 @@ int libsoccr_restore_HA(struct libsoccr_sk *sk,
 		restore_fin_in_snd_queue(sk->fd, mstate & SNDQ_FIN_ACKED);
 
 	if (mstate & RCVQ_FIN_ACKED)
-		data->sk_hd.inq_seq++;
+		data->sk_data.inq_seq++;
 
 	if (mstate & SNDQ_FIN_ACKED) {
-		data->sk_hd.outq_seq++;
+		data->sk_data.outq_seq++;
 		if (send_fin_HAProxy(sk, data, data_size, TH_ACK) < 0)
 			return -1;
 	}
@@ -909,62 +909,63 @@ int libsoccr_restore_HA(struct libsoccr_sk *sk,
 	return 0;
 }
 
-void get_data(dt_info* data_info, char* tmp, prefix pre)
+void get_data(struct dt_info* data_info, char* tmp, struct sk_prefix pre)
 {
-	int len = sizeof(prefix) + pre.conn_size*sizeof(struct sk_hd);
-	int hd_idx = sizeof(prefix);
+	int len = sizeof(struct sk_prefix) + pre.conn_size*(sizeof(struct sk_addr) + sizeof(struct libsoccr_sk_data));
+	int hd_idx = sizeof(struct sk_prefix);
 	//TODO: for loop to get tcp dump data
 	for(int i=0; i < pre.conn_size; i++)
 	{
-		memcpy(&data_info[i], tmp+hd_idx, sizeof(struct sk_hd));	//copy header
-		hd_idx += sizeof(struct sk_hd);
+		memcpy(&data_info[i], tmp + hd_idx, sizeof(struct sk_addr) + sizeof(struct libsoccr_sk_data));	//copy addr + sk_data
+		hd_idx += (sizeof(struct sk_addr) + sizeof(struct libsoccr_sk_data));
 
-		data_info[i].send_queue = malloc(data_info[i].sk_hd.outq_len);  
-		data_info[i].recv_queue = malloc(data_info[i].sk_hd.inq_len);
+		data_info[i].send_queue = malloc(data_info[i].sk_data.outq_len);  
+		data_info[i].recv_queue = malloc(data_info[i].sk_data.inq_len);
 
-		memcpy(data_info[i].send_queue, tmp+len, data_info[i].sk_hd.outq_len);	//copy queue data
-		len += data_info[i].sk_hd.outq_len;
-		memcpy(data_info[i].recv_queue, tmp+len, data_info[i].sk_hd.inq_len);
-		len += data_info[i].sk_hd.inq_len;
+		memcpy(data_info[i].send_queue, tmp+len, data_info[i].sk_data.outq_len);	//copy queue data
+		len += data_info[i].sk_data.outq_len;
+		memcpy(data_info[i].recv_queue, tmp+len, data_info[i].sk_data.inq_len);
+		len += data_info[i].sk_data.inq_len;
 
 		//print_qdata(data_info[i]);
 	}
 
 }
 
-dt_info* get_dump_info(int dt_connfd)
+struct dt_info* get_dump_info(int dt_connfd)
 {
 	int ret = 0;
 	char recv_dt[800];
 	char tmp[800];
-	dt_info *data_info1;
-	prefix pre1;
+	struct dt_info *data_info1;
+	struct sk_prefix pre1;
 	pre1.conn_size = 0;
     
 	ret = read(dt_connfd, recv_dt, 8000);
 	printf("ret:%d\n", ret);
 
 	memcpy(tmp, recv_dt, ret);
-	memcpy(&pre1, tmp, sizeof(prefix));
-	data_info1 = calloc(pre1.conn_size, sizeof(dt_info));
+	memcpy(&pre1, tmp, sizeof(struct sk_prefix));
+	data_info1 = calloc(pre1.conn_size, sizeof(struct dt_info));
 	get_data(data_info1, tmp, pre1);
 
 	return data_info1;
 }
 
-void print_info(dt_info* data)
+void print_info(struct dt_info* data)
 {
 	char str[INET_ADDRSTRLEN];
 		
 	printf("final:\n");
-	printf("data->inq_seq:%u\n", data->sk_hd.inq_seq);
-	printf("data->outq_seq:%u\n", data->sk_hd.outq_seq);
-	inet_ntop(AF_INET, &(data->sk_hd.src_addr), str, INET_ADDRSTRLEN);
-	printf("src: %s:%u\n", str, data->sk_hd.src_port); 
-	inet_ntop(AF_INET, &(data->sk_hd.dst_addr), str, INET_ADDRSTRLEN);
-	printf("dst: %s:%u\n", str, data->sk_hd.dst_port); 
+	printf("data->inq_seq:%u\n", data->sk_data.inq_seq);
+	printf("data->outq_seq:%u\n", data->sk_data.outq_seq);
+	inet_ntop(AF_INET, &(data->sk_addr.src_addr), str, INET_ADDRSTRLEN);
+	printf("src: %s:%u\n", str, data->sk_addr.src_port); 
+	inet_ntop(AF_INET, &(data->sk_addr.dst_addr), str, INET_ADDRSTRLEN);
+	printf("dst: %s:%u\n", str, data->sk_addr.dst_port); 
 }
-int dump_tcp_conn_state_HA(int fd, struct libsoccr_sk_data* data, prefix* hd, dt_info* buf)
+
+int dump_tcp_conn_state_HA(int fd, struct libsoccr_sk_data* data, struct sk_prefix* hd, struct dt_info* buf)
 {
     int ret;
     union libsoccr_addr sa_src, sa_dst;
@@ -991,7 +992,8 @@ int dump_tcp_conn_state_HA(int fd, struct libsoccr_sk_data* data, prefix* hd, dt
     libsoccr_release(socr);
 	return ret;
 }
-void dump_send(int sockfd, int proxy_dt_fd, struct libsoccr_sk_data* data, prefix* pre, dt_info* buf)
+
+void dump_send(int sockfd, int proxy_dt_fd, struct libsoccr_sk_data* data, struct sk_prefix* pre, struct dt_info* buf)
 {
     int hd_idx, len;
     buf = calloc(pre->conn_size, sizeof(*buf));
@@ -1009,18 +1011,18 @@ void dump_send(int sockfd, int proxy_dt_fd, struct libsoccr_sk_data* data, prefi
 		dump_tcp_conn_state_HA(sockfd, data, pre, &buf[i]);
     }
     
-    hd_idx = sizeof(prefix);
-    len = sizeof(prefix) + pre->conn_size*sizeof(struct sk_hd);
+    hd_idx = sizeof(struct sk_prefix);
+    len = sizeof(struct sk_prefix) + pre->conn_size*(sizeof(struct sk_addr)+sizeof(struct libsoccr_sk_data));
     char *send_data = malloc(len);
 
-    memcpy(send_data, pre, sizeof(prefix));
+    memcpy(send_data, pre, sizeof(struct sk_prefix));
 
     for(int i = 0; i < pre->conn_size; i++)        //for loop to store send out buf
     {
-        send_data = realloc(send_data, len + buf[i].sk_hd.outq_len + buf[i].sk_hd.inq_len);
+        send_data = realloc(send_data, len + buf[i].sk_data.outq_len + buf[i].sk_data.inq_len);
         final_save_data(send_data, &buf[i], hd_idx, len);
-        len += buf[i].sk_hd.inq_len + buf[i].sk_hd.outq_len;
-        hd_idx += sizeof(struct sk_hd);
+        len += buf[i].sk_data.inq_len + buf[i].sk_data.outq_len;
+        hd_idx += (sizeof(struct sk_addr)+sizeof(struct libsoccr_sk_data)) ;
     }
 	
     if (tcp_repair_off(sockfd) < 0) {
@@ -1033,7 +1035,7 @@ void dump_send(int sockfd, int proxy_dt_fd, struct libsoccr_sk_data* data, prefi
     free_buf(buf);  //need to decide when to free.
 }
 
-void save_sk_header(prefix* pre, uint16_t conn_size)
+void save_sk_header(struct sk_prefix* pre, uint16_t conn_size)
 {
     pre->version = 1;
     pre->type = 1;
@@ -1093,39 +1095,41 @@ void set_addr_port(struct libsoccr_sk *socr, union libsoccr_addr *sa_src, union 
 	libsoccr_set_addr(socr, 0, sa_dst, 0);
 }
 
-void print_qdata(dt_info data_info)
+void print_qdata(struct dt_info data_info)
 {
 	char out_q[80], in_q[80];
-	snprintf(out_q, data_info.sk_hd.outq_len+1, "%s", data_info.send_queue );
-	snprintf(in_q, data_info.sk_hd.inq_len+1, "%s", data_info.recv_queue );
+	snprintf(out_q, data_info.sk_data.outq_len+1, "%s", data_info.send_queue );
+	snprintf(in_q, data_info.sk_data.inq_len+1, "%s", data_info.recv_queue );
 	printf("in_q:%s\t", in_q);
 	printf("out_q:%s\n", out_q);
 }
 
-void save_sk_data(struct libsoccr_sk_data* data, struct libsoccr_sk* socr, dt_info* buf)
+void save_sk_data(struct libsoccr_sk_data* data, struct libsoccr_sk* socr, struct dt_info* buf)
 {
-    buf->sk_hd.src_addr = socr->src_addr->v4.sin_addr.s_addr;
-    buf->sk_hd.dst_addr = socr->dst_addr->v4.sin_addr.s_addr;
-    buf->sk_hd.src_port = socr->src_addr->v4.sin_port;
-    buf->sk_hd.dst_port = socr->dst_addr->v4.sin_port;
+	buf->sk_addr.fd = socr->fd;
+    buf->sk_addr.src_addr = socr->src_addr->v4.sin_addr.s_addr;
+    buf->sk_addr.dst_addr = socr->dst_addr->v4.sin_addr.s_addr;
+    buf->sk_addr.src_port = socr->src_addr->v4.sin_port;
+    buf->sk_addr.dst_port = socr->dst_addr->v4.sin_port;
 	
-    memcpy(&buf->sk_hd.state, data, sizeof(*data));
+    memcpy(&buf->sk_data.state, data, sizeof(*data));
 
-    buf->send_queue = malloc(buf->sk_hd.outq_len);
+    buf->send_queue = malloc(buf->sk_data.outq_len);
     memcpy(buf->send_queue, socr->send_queue, data->outq_len);
 
-    buf->recv_queue = malloc(buf->sk_hd.inq_len);
+    buf->recv_queue = malloc(buf->sk_data.inq_len);
     memcpy(buf->recv_queue,socr->recv_queue,data->inq_len);
     
     print_qdata(*buf);
     
 }
 
-void final_save_data(char *send_data, dt_info *buf,int hd_idx, int q_idx)
+void final_save_data(char *send_data, struct dt_info *buf,int hd_idx, int q_idx)
 {
-    memcpy(send_data+hd_idx, &buf->sk_hd, sizeof(struct sk_hd));
-    memcpy(send_data+q_idx, buf->send_queue, buf->sk_hd.outq_len);
-    memcpy(send_data+q_idx+buf->sk_hd.outq_len, buf->recv_queue, buf->sk_hd.inq_len);
+	memcpy(send_data + hd_idx, &buf->sk_addr, sizeof(struct sk_addr));
+    memcpy(send_data + hd_idx + sizeof(struct sk_addr), &buf->sk_data, sizeof(struct libsoccr_sk_data));
+    memcpy(send_data + q_idx, buf->send_queue, buf->sk_data.outq_len);
+    memcpy(send_data + q_idx + buf->sk_data.outq_len, buf->recv_queue, buf->sk_data.inq_len);
 }
 
 

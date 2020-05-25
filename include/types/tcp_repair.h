@@ -119,6 +119,7 @@ struct libsoccr_sk {
 
 
 struct sk_addr{
+	int fd;
     uint32_t src_addr;
     uint32_t dst_addr;
     uint16_t src_port;
@@ -133,7 +134,7 @@ struct sk_data_info
 };
 
 /*******************TCP repair by Howard****************/
-typedef struct sk_hd{
+/*typedef struct sk_hd{
     uint32_t src_addr;
     uint32_t dst_addr;
     uint16_t src_port;
@@ -150,51 +151,53 @@ typedef struct sk_hd{
     uint32_t rcv_wscale;
     uint32_t timestamp;
 
-    uint32_t flags; /* SOCCR_FLAGS_... below */
+    uint32_t flags; // SOCCR_FLAGS_... below 
     uint32_t snd_wl1;
     uint32_t snd_wnd;
     uint32_t max_window;
     uint32_t rcv_wnd;
     uint32_t rcv_wup;
 
-}sk_hd;
-typedef struct sk_data_inf
+}sk_hd;*/
+
+struct dt_info			// modify name to sk_info
 {
-    struct sk_hd sk_hd;
+	struct sk_addr sk_addr;
+    struct libsoccr_sk_data sk_data;
     char* send_queue;
     char* recv_queue;
-}dt_info;
+};
 
-typedef struct sk_prefix_info 
+struct sk_prefix
 {
     uint8_t version;
     uint8_t type;
     uint16_t conn_size;
-}prefix;
+};
 
-void free_buf(dt_info* buf);
+void free_buf(struct dt_info* buf);
 void release_sk(struct libsoccr_sk *sk);
 int restore_sockaddr_HA(union libsoccr_addr *sa,
 		int family, uint16_t pb_port, u32 *pb_addr, u32 ifindex);
 int libsoccr_set_sk_data_noq_HA(struct libsoccr_sk *sk,
-		dt_info *data, unsigned data_size);
-int libsoccr_restore_queue_HAProxy(struct libsoccr_sk *sk, dt_info *data, unsigned data_size,
+		struct dt_info *data, unsigned data_size);
+int libsoccr_restore_queue_HAProxy(struct libsoccr_sk *sk, struct dt_info *data, unsigned data_size,
 		int queue, char *buf);
-int send_fin_HAProxy(struct libsoccr_sk *sk, dt_info *data,
+int send_fin_HAProxy(struct libsoccr_sk *sk, struct dt_info *data,
 		unsigned data_size, uint8_t flags);
 int libsoccr_restore_HA(struct libsoccr_sk *sk,
-		dt_info* data, unsigned data_size);
-void get_data(dt_info* data_info, char* tmp, prefix pre);
-dt_info* get_dump_info(int dt_connfd);
-void print_info(dt_info* data);
-void dump_send(int sockfd, int proxy_dt_fd, struct libsoccr_sk_data* data, prefix* pre, dt_info* buf);
-void save_sk_header(prefix* pre, uint16_t conn_size);
+		struct dt_info* data, unsigned data_size);
+void get_data(struct dt_info* data_info, char* tmp, struct sk_prefix pre);
+struct dt_info* get_dump_info(int dt_connfd);
+void print_info(struct dt_info* data);
+void dump_send(int sockfd, int proxy_dt_fd, struct libsoccr_sk_data* data, struct sk_prefix* pre, struct dt_info* buf);
+void save_sk_header(struct sk_prefix* pre, uint16_t conn_size);
 int get_tcp_state(int sd);
 void set_addr_port(struct libsoccr_sk *socr, union libsoccr_addr *sa_src, union libsoccr_addr *sa_dst);
-void print_qdata(dt_info data_info);
-void save_sk_data(struct libsoccr_sk_data* data, struct libsoccr_sk* socr, dt_info* buf);
-void final_save_data(char *send_data, dt_info *buf,int hd_idx, int q_idx);
-int dump_tcp_conn_state_HA(int fd, struct libsoccr_sk_data* data, prefix* hd, dt_info* buf);
+void print_qdata(struct dt_info data_info);
+void save_sk_data(struct libsoccr_sk_data* data, struct libsoccr_sk* socr, struct dt_info* buf);
+void final_save_data(char *send_data, struct dt_info *buf,int hd_idx, int q_idx);
+int dump_tcp_conn_state_HA(int fd, struct libsoccr_sk_data* data, struct sk_prefix* hd, struct dt_info* buf);
 /*******************TCP repair by Howard****************/
 
 int restore_sockaddr(union libsoccr_addr *sa,

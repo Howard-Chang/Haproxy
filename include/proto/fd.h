@@ -602,12 +602,17 @@ static inline void fd_update_events(int fd, int evts)
 	if (fdtab[fd].ev & (FD_POLL_OUT | FD_POLL_ERR))
 		fd_may_send(fd);
 }
+/*
+static inline void fd_copy(int fd, void *owner, void (*iocb)(int fd), unsigned long thread_mask)
+{
+	
+}*/
 
 /* Prepares <fd> for being polled */
 static inline void fd_insert(int fd, void *owner, void (*iocb)(int fd), unsigned long thread_mask)
 {
 	unsigned long locked = atleast2(thread_mask);
-
+	printf("fd_insert   fd:%d  OOOOOOOOOO\n", fd);
 	if (locked)
 		HA_SPIN_LOCK(FD_LOCK, &fdtab[fd].lock);
 	fdtab[fd].owner = owner;

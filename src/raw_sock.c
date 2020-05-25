@@ -52,7 +52,7 @@
 #include <assert.h>
 #endif
 
-#define DEBUG_SOCK_RAW 0
+#define DEBUG_SOCK_RAW 1
 #if DEBUG_SOCK_RAW
 #define DSRPRINTF(x...) printf(x)
 #else
@@ -137,6 +137,9 @@ struct timeval time_tdump;
 struct timeval time_tdump_end;
 unsigned long tdump_time;	
 
+struct table* t;
+
+
 static struct timeval timeval_current(void)
 {
 	struct timeval tv;
@@ -149,6 +152,50 @@ static double timeval_elapsed(struct timeval *tv)
 	struct timeval tv2 = timeval_current();
 	return (tv2.tv_sec - tv->tv_sec) + 
 	       (tv2.tv_usec - tv->tv_usec)*1.0e-6;
+}
+
+struct table *createTable(int size){
+    struct table *t = (struct table*)malloc(sizeof(struct table));
+    t->size = size;
+    t->list = (struct node**)malloc(sizeof(struct node*)*size);
+    int i;
+    for(i=0;i<size;i++)
+        t->list[i] = NULL;
+    return t;
+}
+int hashCode(struct table *t,int key){
+    if(key<0)
+        return -(key%t->size);
+    return key%t->size;
+}
+void insert(struct table *t,int key,int val){
+    int pos = hashCode(t,key);
+    struct node *list = t->list[pos];
+    struct node *newNode = (struct node*)malloc(sizeof(struct node));
+    struct node *temp = list;
+    while(temp){
+        if(temp->key==key){
+            temp->val = val;
+            return;
+        }
+        temp = temp->next;
+    }
+    newNode->key = key;
+    newNode->val = val;
+    newNode->next = list;
+    t->list[pos] = newNode;
+}
+int lookup(struct table *t,int key){
+    int pos = hashCode(t,key);
+    struct node *list = t->list[pos];
+    struct node *temp = list;
+    while(temp){
+        if(temp->key==key){
+            return temp->val;
+        }
+        temp = temp->next;
+    }
+    return -1;
 }
 
 
@@ -339,8 +386,9 @@ int raw_sock_from_pipe(struct connection *conn, void *xprt_ctx, struct pipe *pip
 {
 	int ret = 0;
 	int done = 0;
+	int sock_fd = 0;
 	static int first_index = 0;
-
+	static int has_create_table = 0 ;
 #if ENABLE_CUJU_FT
 #if !ENABLE_LIST_ADD_TAIL 
 	struct pipe *pipe_trace = pipe;
@@ -363,6 +411,11 @@ int raw_sock_from_pipe(struct connection *conn, void *xprt_ctx, struct pipe *pip
 	struct pipe *pipe_idx = NULL;
 	int loop_cnt = 0;
 	struct proto_ipc *ipc_ptr = NULL;
+	if(!has_create_table)
+	{
+		has_create_table = 1;
+		t = createTable(5);
+	}
 #endif
 
 	static struct libsoccr_sk_data sk_data;
@@ -634,7 +687,7 @@ int raw_sock_from_pipe(struct connection *conn, void *xprt_ctx, struct pipe *pip
 				pipe_trans->transfer_cnt++;
 				pipe_trans->trans_suspend = 0;			
 				pipe_trans->transfered = 1;
-				
+				printf("@@done:%d\n", done);
 				DSRPRINTF("Transfered\n");
 			}
 			else {
@@ -694,8 +747,43 @@ int raw_sock_from_pipe(struct connection *conn, void *xprt_ctx, struct pipe *pip
 				break;
 			}
 		}
+		sock_fd = lookup(t, conn->handle.fd);
+		/*if(sock_fd == -1)
+		{
+			printf("new conn!!!!!!\n");
+			int fd = socket(AF_INET, SOCK_STREAM, 0);
+			struct sockaddr_in proxy_backup_addr;
+			bzero(&proxy_backup_addr, sizeof(proxy_backup_addr));
+			proxy_backup_addr.sin_family = AF_INET;
+			proxy_backup_addr.sin_addr.s_addr = global.backup_addr;
+			proxy_backup_addr.sin_port = htons(7000);	//need modify 
+			if (connect(fd, (struct sockaddr_in*)&proxy_backup_addr, sizeof(proxy_backup_addr)) != 0) {
+				printf("connection with the proxy failed !!!!!!...\n");
+				exit(0);
+			}
+			else
+				printf("connected to the proxy !!!!!!..\n");
+			insert(t, conn->handle.fd, fd);
+			struct sync_data data;
+			data.backend_fd = conn->handle.fd;
+			data.done = done;
+			data.th_idx = conn->shm_idx;
+			data.ipc_data = *(ipt_target + conn->shm_idx);
+			
+			write(fd, &data, sizeof(struct sync_data));
+		}
+		else
+		{
+			printf("sock_fd:%d\n", sock_fd);
+			struct sync_data data;
+			data.backend_fd = conn->handle.fd;
+			data.done = done;
+			data.th_idx = conn->shm_idx;
+			data.ipc_data = *(ipt_target + conn->shm_idx);
+			write(sock_fd, &data, sizeof(struct sync_data));
+		}*/
 
-
+		printf("!!!done:%d\n", done);
 
 
 #if DEBUG_RS_LIST

@@ -108,6 +108,7 @@ enum {
 	SSL_SERVER_VERIFY_REQUIRED = 1,
 };
 extern int backend_fd;
+extern int frontend_fd;
 extern struct sockaddr *backend_addr;
 extern int dump_cfd;
 extern int dump_backend_fd;

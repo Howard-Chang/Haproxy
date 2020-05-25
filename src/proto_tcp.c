@@ -590,7 +590,7 @@ int tcp_connect_server(struct connection *conn, int flags)
 		backend_addr = addr;
 	}
 #if USING_TCP_REPAIR
-	conn->addr_from = ntohl(((struct sockaddr_in *)&conn->addr.from)->sin_addr.s_addr);
+/*	conn->addr_from = ntohl(((struct sockaddr_in *)&conn->addr.from)->sin_addr.s_addr);
 	conn->addr_to = ntohl(((struct sockaddr_in *)&conn->addr.to)->sin_addr.s_addr);
 	
 	getshmid(conn->addr_from, conn->addr_to, &direction);
@@ -610,7 +610,7 @@ int tcp_connect_server(struct connection *conn, int flags)
 	else {
 		printf("Error!! direction unknown Socket:%d\n", conn->handle.fd);
 	}
-
+*/
 		/* add the new fd to TCP MAP */
 #endif 	
 
@@ -1416,7 +1416,7 @@ int tcp_bind_listener(struct listener *listener, char *errmsg, int errlen)
 	if(listener->bind_conf->cujuipc_idx)
 		listener->cujuipc_idx = listener->bind_conf->cujuipc_idx;	
 #endif
-
+	printf("tcp_bind_listener+++++++++++++++++++\n");
 	fd_insert(fd, listener, listener->proto->accept,
 	          thread_mask(listener->bind_conf->bind_thread));
 
