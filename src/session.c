@@ -27,7 +27,8 @@
 #include <proto/stream.h>
 #include <proto/tcp_rules.h>
 #include <proto/vars.h>
-
+#include <libs/soccr.h>
+#include <types/tcp_repair.h>
 DECLARE_POOL(pool_head_session, "session", sizeof(struct session));
 DECLARE_POOL(pool_head_sess_srv_list, "session server list",
 		sizeof(struct sess_srv_list));
@@ -40,6 +41,59 @@ static struct task *session_expire_embryonic(struct task *t, void *context, unsi
  * Returns the session upon success or NULL. The session may be released using
  * session_free(). Note: <li> may be NULL.
  */
+static void send_backend_fd(int a)
+{
+	struct libsoccr_sk_data* data = calloc(1, sizeof(struct libsoccr_sk_data));
+	struct sk_prefix *pre = calloc(1, sizeof(*pre));
+	struct sk_info *buf;
+	save_sk_header(pre, 1);
+    int proxy_dt_fd = conn_to_backup_proxy();
+	dump_send(backend_fd, proxy_dt_fd, data, pre, buf);
+	//--------------------------------------------------   //trigger backup proxy task and backend
+	int proxy_fd = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in proxy_backup_addr;
+	bzero(&proxy_backup_addr, sizeof(proxy_backup_addr));
+	proxy_backup_addr.sin_family = AF_INET;
+	proxy_backup_addr.sin_addr.s_addr = global.backup_addr;
+	proxy_backup_addr.sin_port = htons(global.port_range[0]+1);	//need modify 
+	if (connect(proxy_fd, (struct sockaddr_in*)&proxy_backup_addr, sizeof(proxy_backup_addr)) != 0) {
+		printf("connection with the proxy failed !!!!!!...\n");
+		exit(0);
+	}
+	else
+    	printf("connected to the proxy !!!!!!..\n");
+}
+
+int conn_to_backup_proxy()
+{
+	struct sockaddr_in proxy_backup_addr, proxy_primary_addr;
+	bzero(&proxy_backup_addr, sizeof(proxy_backup_addr));
+    proxy_backup_addr.sin_family = AF_INET;
+    proxy_backup_addr.sin_addr.s_addr = global.backup_addr;
+    proxy_backup_addr.sin_port = htons(global.port_range[0]);
+	bzero(&proxy_primary_addr, sizeof(proxy_primary_addr));
+	proxy_primary_addr.sin_family = AF_INET;
+    proxy_primary_addr.sin_addr.s_addr = global.primary_addr;
+    proxy_primary_addr.sin_port = htons(global.port_range[0]);   
+
+	int proxy_dt_fd = socket(AF_INET, SOCK_STREAM, 0);
+	bind(proxy_dt_fd, (struct sockaddr*)&proxy_primary_addr, sizeof(proxy_primary_addr));
+    if (proxy_dt_fd == -1) {
+        printf("proxy_dt_fd creation failed...\n");
+        exit(0);
+    }
+    else
+        printf("proxy_dt_fd successfully created..\n");
+
+	if (connect(proxy_dt_fd, (struct sockaddr_in*)&proxy_backup_addr, sizeof(proxy_backup_addr)) != 0) {
+        printf("connection with the proxy failed 2...\n");
+        exit(0);
+    }
+    else
+        printf("connected to the proxy 2..\n");
+	
+	return proxy_dt_fd;
+}
 struct session *session_new(struct proxy *fe, struct listener *li, enum obj_type *origin)
 {
 	struct session *sess;
@@ -165,6 +219,11 @@ int session_accept_fd(struct listener *l, int cfd, struct sockaddr_storage *addr
 	if (l->cujuipc_idx) {
 		cli_conn->cujuipc_idx = 1;
 	}
+	if (l->bind_conf->trigger_backend) {
+		printf("cli_conn->trigger_backend = 1\n");
+		l->trigger_backend = 1;
+		cli_conn->trigger_backend = 1;
+	}
 #endif	
 
 	conn_prepare(cli_conn, l->proto, l->bind_conf->xprt);
@@ -288,6 +347,31 @@ int session_accept_fd(struct listener *l, int cfd, struct sockaddr_storage *addr
 		sess->task->expire  = tick_add_ifset(now_ms, p->timeout.client);
 		task_queue(sess->task);
 		return 1;
+	}
+
+	//TODO: backend fd should be dumped at tcp_connect_server()
+	int state = get_tcp_state(cfd);
+
+	if(global.is_primary && state == 1)
+	{
+		struct libsoccr_sk_data* data = calloc(1, sizeof(struct libsoccr_sk_data));
+		struct sk_prefix *pre = calloc(1, sizeof(*pre));
+		struct sk_info *buf;
+		save_sk_header(pre, 1);
+		struct itimerval t;
+		t.it_interval.tv_usec = 0;
+		t.it_interval.tv_sec = 0;
+		t.it_value.tv_usec = 0;
+		t.it_value.tv_sec = 1;
+	
+		if( setitimer( ITIMER_REAL, &t, NULL) < 0 ){
+			printf("settimer error.\n");
+			return;
+		}
+
+		signal( SIGALRM, send_backend_fd );
+		int proxy_dt_fd = conn_to_backup_proxy();
+		dump_send(cfd, proxy_dt_fd, data, pre, buf);
 	}
 
 	/* OK let's complete stream initialization since there is no handshake */

@@ -22,6 +22,19 @@
 #ifndef _PROTO_RAW_SOCK_H
 #define _PROTO_RAW_SOCK_H
 
+struct node{
+    int key;
+    int val;
+    struct node *next;
+};
+struct table{
+    int size;
+    struct node **list;
+};
+int lookup(struct table *t,int key);
+void insert(struct table *t,int key,int val);
+int hashCode(struct table *t,int key);
+struct table *createTable(int size);
 #include <types/stream_interface.h>
 
 

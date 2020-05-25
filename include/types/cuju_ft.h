@@ -8,7 +8,8 @@
 #include <types/tcp_repair.h>
 
 extern int pb_event;
-
+#define CONN_IS_SERVER 1
+#define CONN_IS_CLIENT 0
 #define IP_LENGTH 4
 #define DEFAULT_NIC_CNT 3
 #define CONNECTION_LENGTH 12
@@ -171,6 +172,14 @@ struct netlink_ipc
     u_int16_t conn_port; 
 };
 
+struct sync_data
+{
+    int backend_fd;
+    int done;
+    int th_idx;   
+    struct proto_ipc ipc_data; 
+};
+
 #endif /* End of ENABLE_CUJU_IPC*/
 
 
@@ -252,6 +261,7 @@ uint16_t getshmid(u_int32_t source, u_int32_t dest, uint8_t *dir);
 
 struct vm_list* target_in_table(struct list *table, u_int32_t vm_ip, u_int32_t socket_id);
 struct vm_list *add_vm_target(struct list *table, u_int32_t vm_ip, u_int32_t socket_id, struct connection *conn);
+int add_vmlist_by_conn(struct connection* conn, int cli_srv);
 struct vm_list* vm_in_table(struct list *table, u_int32_t vm_ip);
 int del_target(struct list *table, u_int32_t vm_ip, u_int32_t socket_id);
 int show_target_rule(struct list *table);

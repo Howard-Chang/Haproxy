@@ -789,7 +789,33 @@ void listener_accept(int fd)
 #endif
 			if ((cfd = accept(fd, (struct sockaddr *)&addr, &laddr)) != -1)
 				fcntl(cfd, F_SETFL, O_NONBLOCK);
-
+		//tcp-repair    	Howard
+		struct sockaddr_in connectedAddr, peerAddr;
+		int connectedAddrLen, peerLen;
+		connectedAddrLen = sizeof(connectedAddr);  
+		peerLen = sizeof(peerAddr);
+		printf("cfd:%d\n", cfd);
+		getsockname(cfd, (struct sockaddr *)&connectedAddr, &connectedAddrLen);
+		getpeername(cfd, (struct sockaddr *)&peerAddr, &peerLen); 
+		printf("@@connected server address = %s:%d\n", inet_ntoa(connectedAddr.sin_addr), ntohs(connectedAddr.sin_port));  
+		printf("@@connected peer address = %s:%d\n", inet_ntoa(peerAddr.sin_addr), ntohs(peerAddr.sin_port)); 
+		if(!global.is_primary && cfd != -1 && (ntohs(connectedAddr.sin_port) > global.port_range[0] && ntohs(connectedAddr.sin_port) <= global.port_range[1]))
+		{
+			printf("!!!dump_cfd:%d\n", dump_cfd);
+			cfd = dump_cfd;
+			//getsockname(dump_cfd, (struct sockaddr *)&connectedAddr, &connectedAddrLen);
+			getpeername(dump_cfd, (struct sockaddr *)&peerAddr, &peerLen); 
+			memcpy(&(((struct sockaddr_in *)&addr)->sin_addr), &peerAddr.sin_addr, sizeof(struct in_addr));
+			memcpy(&(((struct sockaddr_in *)&addr)->sin_port), &peerAddr.sin_port, sizeof(in_port_t));
+			printf("((struct sockaddr_in *)&addr)->sin_port:%u\n", ((struct sockaddr_in *)&addr)->sin_port);
+			printf("((struct sockaddr_in *)&addr)->sin_addr:%s\n", inet_ntoa(((struct sockaddr_in *)&addr)->sin_addr));
+			printf("---------------------dump_cfd info--------------------------\n");
+			getsockname(dump_cfd, (struct sockaddr *)&connectedAddr, &connectedAddrLen);
+			getpeername(dump_cfd, (struct sockaddr *)&peerAddr, &peerLen); 
+			printf("@@connected server address = %s:%d\n", inet_ntoa(connectedAddr.sin_addr), ntohs(connectedAddr.sin_port));  
+			printf("@@connected peer address = %s:%d\n", inet_ntoa(peerAddr.sin_addr), ntohs(peerAddr.sin_port)); 
+		
+		}
 		if (unlikely(cfd == -1)) {
 			switch (errno) {
 			case EAGAIN:

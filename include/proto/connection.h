@@ -139,6 +139,7 @@ static inline void conn_ctrl_init(struct connection *conn)
 
 #if ENABLE_CUJU_FT
 		if (!conn->cujuipc_idx) {
+			printf("fd_may_send***************************\n");
 			fd_may_send(fd);
 		}
 #else

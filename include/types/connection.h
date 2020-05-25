@@ -466,6 +466,8 @@ struct connection {
 	unsigned int idle_time;                 /* Time the connection was added to the idle list, or 0 if not in the idle list */
 #if ENABLE_CUJU_FT
 	unsigned int cujuipc_idx;
+	int trigger_backend;
+	int backend_fd;
 	struct guest_ip_list* conn_gipl;
 	uint8_t direction;  /* 1 means that dest. is client application, 2 means that dest. is Guest. */
 	uint32_t addr_from;

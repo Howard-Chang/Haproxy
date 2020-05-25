@@ -656,6 +656,48 @@ int cfg_parse_global(const char *file, int linenum, char **args, int kwm)
 		}
 		global.maxpipes = atol(args[1]);
 	}
+	else if (!strcmp(args[0], "is_primary")){
+		if (alertif_too_many_args(1, file, linenum, args, &err_code))
+			goto out;
+		if (*(args[1]) == 0) {
+			ha_alert("parsing [%s:%d] : '%s' expects an integer argument.\n", file, linenum, args[0]);
+			err_code |= ERR_ALERT | ERR_FATAL;
+			goto out;
+		}
+		global.is_primary = atoi(args[1]);
+	}
+	else if (!strcmp(args[0], "primary_ip"))
+	{
+		if (alertif_too_many_args(1, file, linenum, args, &err_code))
+			goto out;
+		if (*(args[1]) == 0) {	//need modify
+			ha_alert("parsing [%s:%d] : '%s' expects an integer argument.\n", file, linenum, args[0]);
+			err_code |= ERR_ALERT | ERR_FATAL;
+			goto out;
+		}
+		global.primary_addr = inet_addr(args[1]);
+	}
+	else if (!strcmp(args[0], "backup_ip"))
+	{
+		if (alertif_too_many_args(2, file, linenum, args, &err_code))
+			goto out;
+		if (*(args[1]) == 0 || *(args[2]) == 0) {	//need modify
+			ha_alert("parsing [%s:%d] : '%s' expects an integer argument.\n", file, linenum, args[0]);
+			err_code |= ERR_ALERT | ERR_FATAL;
+			goto out;
+		}
+		global.backup_addr = inet_addr(args[1]);
+		char *tmp = args[2];
+		int cnt = 0;
+		while(tmp[cnt] && tmp[cnt] != '-')
+		{
+			cnt++;
+		}
+		tmp[cnt] = 0;
+		global.port_range[0] = atoi(tmp);
+		global.port_range[1] = atoi(tmp+cnt+1);
+		printf("global.port_range[0]:%d global.port_range[1]:%d\n", global.port_range[0],global.port_range[1]);
+	}
 	else if (!strcmp(args[0], "maxzlibmem")) {
 		if (alertif_too_many_args(1, file, linenum, args, &err_code))
 			goto out;

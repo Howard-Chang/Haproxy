@@ -52,7 +52,7 @@
 #include <assert.h>
 #endif
 
-#define DEBUG_SOCK_RAW 0
+#define DEBUG_SOCK_RAW 1
 #if DEBUG_SOCK_RAW
 #define DSRPRINTF(x...) printf(x)
 #else
@@ -175,7 +175,8 @@ int raw_sock_to_pipe(struct connection *conn, void *xprt_ctx, struct pipe *pipe,
 
 	if (!fd_recv_ready(conn->handle.fd))
 		return 0;
-
+	/*ret = splice(conn->handle.fd, NULL, pipe->prod, NULL, count,
+					 SPLICE_F_MOVE|SPLICE_F_NONBLOCK);*/
 	//printf("[%s] Enter ID:%d\n", __func__, pthread_self());
 
 	conn_refresh_polling_flags(conn);
@@ -374,7 +375,10 @@ int raw_sock_from_pipe(struct connection *conn, void *xprt_ctx, struct pipe *pip
 
 	if (!fd_send_ready(conn->handle.fd))
 		return 0;
-
+	/*printf("raw_sock_from_pipe conn->handle.fd:%d\n", conn->handle.fd);
+	
+	ret = splice(pipe_trans->cons, NULL, conn->handle.fd, NULL,
+							pipe_trans->data, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);*/
 	conn_refresh_polling_flags(conn);
 
 	DSRPRINTF("%s: %p\n", __func__, pipe);

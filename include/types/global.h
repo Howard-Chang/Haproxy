@@ -107,7 +107,14 @@ enum {
 	SSL_SERVER_VERIFY_NONE = 0,
 	SSL_SERVER_VERIFY_REQUIRED = 1,
 };
-
+extern int backend_fd;
+extern struct sockaddr *backend_addr;
+extern int dump_cfd;
+extern int dump_backend_fd;
+extern int task_fd;
+extern struct sk_info* sk_data;
+/*extern uint16_t client_port;
+extern uint32_t client_addr;*/
 /* FIXME : this will have to be redefined correctly */
 struct global {
 	int uid;
@@ -159,6 +166,10 @@ struct global {
 	char *log_send_hostname;   /* set hostname in syslog header */
 	char *server_state_base;   /* path to a directory where server state files can be found */
 	char *server_state_file;   /* path to the file where server states are loaded from */
+	int is_primary;	//for FT proxy
+	u_int32_t backup_addr;
+	u_int32_t primary_addr;
+	int port_range[2];	//port_range[0] is lower bound, port_range[1] is upper bound
 	struct {
 		int maxpollevents; /* max number of poll events at once */
 		int maxaccept;     /* max number of consecutive accept() */

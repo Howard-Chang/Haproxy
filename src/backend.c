@@ -60,6 +60,7 @@
 #include <proto/ssl_sock.h>
 #include <proto/task.h>
 
+
 int be_lastsession(const struct proxy *be)
 {
 	if (be->be_counters.last_sess)
@@ -1204,6 +1205,7 @@ fail:
  */
 int connect_server(struct stream *s)
 {
+	printf("enter connect_server----------------------------\n");
 	struct connection *cli_conn = NULL;
 	struct connection *srv_conn = NULL;
 	struct connection *old_conn = NULL;
@@ -1676,6 +1678,46 @@ int connect_server(struct stream *s)
 
 	}
 
+	cli_conn->handle.fd = dump_cfd;
+	srv_conn->handle.fd = dump_backend_fd;
+	printf("dump_cfd:%d ", dump_cfd);
+	printf("dump_backend_fd:%d +++++++++++++++++++++\n", dump_backend_fd);
+
+	struct sockaddr_storage to, from;
+	struct sockaddr_in connectedAddr, peerAddr;
+	int connectedAddrLen, peerLen;
+	connectedAddrLen = sizeof(connectedAddr);  
+	peerLen = sizeof(peerAddr);
+	getsockname(dump_backend_fd, (struct sockaddr *)&connectedAddr, &connectedAddrLen);
+	getpeername(dump_backend_fd, (struct sockaddr *)&peerAddr, &peerLen); 
+	memcpy(&to, (struct sockaddr_storage*)&peerAddr, sizeof(struct sockaddr_storage));
+	memcpy(&from, (struct sockaddr_storage*)&connectedAddr, sizeof(struct sockaddr_storage));
+	srv_conn->addr_to = ntohl(((struct sockaddr_in *)&srv_conn->addr.to)->sin_addr.s_addr);
+	srv_conn->addr_from = ntohl(((struct sockaddr_in *)&srv_conn->addr.from)->sin_addr.s_addr);
+	srv_conn->addr.to = to;
+	srv_conn->addr.from = from;
+	printf("connected to address = %s:%d\n", inet_ntoa(((struct sockaddr_in*)&to)->sin_addr), ntohs(((struct sockaddr_in*)&to)->sin_port));
+	printf("connected from address = %s:%d\n", inet_ntoa(((struct sockaddr_in*)&from)->sin_addr), ntohs(((struct sockaddr_in*)&from)->sin_port));
+
+
+	getsockname(dump_cfd, (struct sockaddr *)&connectedAddr, &connectedAddrLen);
+	getpeername(dump_cfd, (struct sockaddr *)&peerAddr, &peerLen); 
+	memcpy(&to, (struct sockaddr_storage*)&peerAddr, sizeof(struct sockaddr_storage));
+	memcpy(&from, (struct sockaddr_storage*)&connectedAddr, sizeof(struct sockaddr_storage));
+	cli_conn->addr_to = ntohl(((struct sockaddr_in *)&cli_conn->addr.from)->sin_addr.s_addr);
+	cli_conn->addr_from = ntohl(((struct sockaddr_in *)&cli_conn->addr.to)->sin_addr.s_addr);
+	cli_conn->addr.to = from;
+	cli_conn->addr.from = to;
+	printf("connected to address = %s:%d\n", inet_ntoa(((struct sockaddr_in*)&to)->sin_addr), ntohs(((struct sockaddr_in*)&to)->sin_port));
+	printf("connected from address = %s:%d\n", inet_ntoa(((struct sockaddr_in*)&from)->sin_addr), ntohs(((struct sockaddr_in*)&from)->sin_port));
+	
+
+	struct proto_ipc *ptr = ipt_target;
+	(ptr + 1)->nic[0] = srv_conn->addr_to;
+	#if USING_TCP_REPAIR
+    add_vmlist_by_conn(srv_conn, CONN_IS_SERVER);
+    add_vmlist_by_conn(cli_conn, CONN_IS_CLIENT);
+	#endif
 	return SF_ERR_NONE;  /* connection is OK */
 }
 

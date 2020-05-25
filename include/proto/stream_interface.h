@@ -510,7 +510,13 @@ static inline int si_connect(struct stream_interface *si, struct connection *con
 	if (si->conn_retries == si_strm(si)->be->conn_retries)
 		conn_flags |= CONNECT_CAN_USE_TFO;
 	if (!conn_ctrl_ready(conn) || !conn_xprt_ready(conn)) {
-		ret = conn->ctrl->connect(conn, conn_flags);
+		if(!global.is_primary && conn->trigger_backend)  //need add FT condition
+		{
+			ret = conn->ctrl->connect_ft(conn, conn_flags);
+			printf("conn->trigger_backend ~~~~~\n");
+		}
+		else
+			ret = conn->ctrl->connect(conn, conn_flags);
 		if (ret != SF_ERR_NONE)
 			return ret;
 

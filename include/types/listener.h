@@ -183,6 +183,7 @@ struct bind_conf {
 	} ux;
 #if ENABLE_CUJU_FT
 	int cujuipc_idx;
+	int trigger_backend;
 #endif
 };
 
@@ -236,6 +237,7 @@ struct listener {
 #if ENABLE_CUJU_FT
 	int cujuipc_idx;
 	int set_cuju;
+	int trigger_backend;
 #endif	
 };
 

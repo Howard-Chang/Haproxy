@@ -68,7 +68,7 @@ static struct guest_ip_list gip_list = {
 #define MSG_PRINTF(x...)
 #endif
 
-#define DEBUG_IPC 0
+#define DEBUG_IPC 1
 #if DEBUG_IPC
 #define IPC_PRINTF(x...) printf(x)
 #else
@@ -795,7 +795,7 @@ uint16_t getshmid(u_int32_t source, u_int32_t dest, uint8_t *dir)
 {
 	struct proto_ipc *ptr = ipt_target;
 	unsigned int idx = 0;
-
+	//(ptr + 1)->nic[0] = dest;
 	printf("[%s] ipt_target:%p  source:%08x dest:%08x\n", __func__, ipt_target, source, dest);
 	printf("[%s] base:%p base+1:%p\n", __func__, ptr, (ptr + 1));
 	//if (ipt_target->nic_count) {
@@ -847,6 +847,28 @@ struct vm_list *vm_in_table(struct list *table, u_int32_t vm_ip)
 	}
 
 	return NULL;
+}
+
+
+int add_vmlist_by_conn(struct connection* conn, int cli_srv)
+{
+    int direction = DIR_NO_CHECK;
+    if (conn == NULL)
+        return;
+    conn->addr_from = ntohl(((struct sockaddr_in *)&conn->addr.from)->sin_addr.s_addr);
+    conn->addr_to = ntohl(((struct sockaddr_in *)&conn->addr.to)->sin_addr.s_addr);
+    getshmid(conn->addr_from, conn->addr_to, &direction);
+    if ((direction == DIR_DEST_GUEST) && (cli_srv == CONN_IS_SERVER)) {
+        printf("[%s] DIR_DEST_GUEST %d\n", __func__, conn->handle.fd);
+        add_vm_target(&vm_head.vm_list, ntohl(((struct sockaddr_in *)&conn->addr.to)->sin_addr.s_addr), conn->handle.fd, conn);
+        conn->direction = direction;
+    }
+    if ((direction == DIR_DEST_CLIENT) && (cli_srv == CONN_IS_CLIENT)) {
+        printf("[%s] DIR_DEST_CLIENT %d\n", __func__, conn->handle.fd);
+        add_vm_target(&vm_head.vm_list, ntohl(((struct sockaddr_in *)&conn->addr.from)->sin_addr.s_addr), conn->handle.fd, conn);
+        conn->direction = direction;
+    }
+    return 0;
 }
 
 struct vm_list *add_vm_target(struct list *table, u_int32_t vm_ip, u_int32_t socket_id,
@@ -1252,7 +1274,8 @@ void *ipc_connection_handler(void *socket_desc)
 	struct fo_list *fo_temp = NULL;
 	struct vm_list *target_vm = NULL;
 	pthread_t thread_snapshot;
-
+	struct vm_list *target;
+	struct vmsk_list *target_sk;
 #if USING_NETLINK
 	int sock_fd = ((struct thread_data *)socket_desc)->netlink_sock;
 	struct sockaddr_nl dest_addr;
@@ -1323,7 +1346,23 @@ void *ipc_connection_handler(void *socket_desc)
 
 		IPC_PRINTF("[%s] POP_FAILOVER %08x\n", __func__, ipc_ptr->nic[0]);
 		fo_temp = pop_failover((ipc_ptr->nic[0]));
+		// Howard
+		//restore_one_tcp_HA(dump_backend_fd, sk_data, 0, 1);
+		
+		
 
+		list_for_each_entry(target, &vm_head.vm_list, vm_list) {
+				if (target->socket_count) {
+						list_for_each_entry(target_sk, &target->skid_head.skid_list, skid_list) {
+						printf("\tbackend_fd: %d \n", target_sk->socket_id);
+						restore_one_tcp_conn(dump_backend_fd, &(target_sk->sk_data));
+						print_sk_data_info(&target_sk->sk_data);
+				}
+			}
+		}
+		
+		printf("@@@@@@@@@@@@@@\n");
+		
 		if (fo_temp != NULL) {
 			IPC_PRINTF("failover list not empty\n");
 			printf("failover list not empty\n");
