@@ -20,7 +20,7 @@
 #include <common/libnet-structures.h>
 #include <common/libnet-macros.h>
 #include <pthread.h>
-
+#include <sys/time.h>
 #ifdef DEBUG_FULL
 #include <assert.h>
 #endif
@@ -46,7 +46,7 @@ static struct guest_ip_list gip_list = {
 	.list = LIST_HEAD_INIT(gip_list.list)
 };
 #endif
-
+int ft_mode = 1;
 #define DEBUG_CUJU_IPC 0
 #if DEBUG_CUJU_IPC
 #define CJIRPRINTF(x...) printf(x)
@@ -1195,6 +1195,9 @@ void *ipc_handler(void)
 	serverInfo.sin_addr.s_addr = INADDR_ANY;
 	serverInfo.sin_port = htons(1200);
 
+	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, (const char*)&one, sizeof(one)) < 0) 
+		perror("setsockopt(SO_REUSEPORT) failed");
+
 	bind(sockfd, (struct sockaddr *)&serverInfo, sizeof(serverInfo));
 
 	listen(sockfd, 5);
@@ -1413,7 +1416,7 @@ void *ipc_connection_handler(void *socket_desc)
 
 			
 			struct vm_list *vm_data = NULL;
-
+			ft_mode = 1;
 			IPC_PRINTF("FT mode is CUJU_FT_INIT from %08x\n", base_nic);
 			/* create new thread for snapshot */
 
@@ -1532,7 +1535,7 @@ int ipc_dump_tcp(struct vm_list *vm_target)
 
 	return 0;
 }
-
+/*
 int sync_fd_state(struct vm_list *vm_target, struct dt_info *buf)
 {
 	struct vm_list *target;
@@ -1555,7 +1558,19 @@ int sync_fd_state(struct vm_list *vm_target, struct dt_info *buf)
 	IPC_TH_PRINTF("========================= END =========================\n");
 
 	return 0;
-}
+}*/
+
+/*int sync_fd_state_test(int fd, struct dt_info *buf)
+{
+	struct libsoccr_sk_data* data = calloc(1, sizeof(struct libsoccr_sk_data));
+	struct sk_prefix *pre = calloc(1, sizeof(*pre));
+	struct dt_info *buf;
+	save_sk_header(pre, 1);
+    int proxy_dt_fd = conn_to_backup_proxy();
+	dump_send(backend_fd, proxy_dt_fd, data, pre, buf);
+
+	return 0;
+}*/
 
 int ipc_restore_tcp(struct vm_list *vm_target)
 {
@@ -1624,6 +1639,10 @@ void *ipc_snapshot_in(void *data)
 	struct sk_prefix *pre = malloc(sizeof(struct sk_prefix));
 	u_int32_t socket_count;
 	static int enter = 1;
+	struct  timeval start;
+	struct  timeval end;
+	unsigned  long diff;
+
 	printf("[%s] vm_data:%p  nic:%08x\n", __func__, vm_target, vm_target->nic[0]);
 
 	while (1) {
@@ -1645,8 +1664,8 @@ void *ipc_snapshot_in(void *data)
 
 			if (vm_target->socket_count) {
 				//printf("[%s] real socket count:%d\n\n\n", __func__, vm_target->socket_count);
-				
-				/*save_sk_header(pre, vm_target->socket_count);
+				/*
+				save_sk_header(pre, vm_target->socket_count);
 				buf = calloc(pre->conn_size, sizeof(*buf));
 				sync_fd_state(vm_target, buf);  //ipc_dump_tcp
 				hd_idx = sizeof(struct sk_prefix);
@@ -1681,6 +1700,38 @@ void *ipc_snapshot_in(void *data)
 				write(fd, send_data, len);*/
 				//print_info(buf);
 				//free(buf);
+				if(enter)
+				{
+					fd = socket(AF_INET, SOCK_STREAM, 0);
+					struct sockaddr_in proxy_backup_addr;
+					bzero(&proxy_backup_addr, sizeof(proxy_backup_addr));
+					proxy_backup_addr.sin_family = AF_INET;
+					proxy_backup_addr.sin_addr.s_addr = global.backup_addr;
+					proxy_backup_addr.sin_port = htons(4000);	//need modify 
+					if (connect(fd, (struct sockaddr_in*)&proxy_backup_addr, sizeof(proxy_backup_addr)) != 0) {
+						printf("connection with the proxy failed !!!!!!...\n");
+						exit(0);
+					}
+					else
+						printf("connected to the proxy ~~~~~~~~~\n");
+					enter = 0;
+				}
+				struct libsoccr_sk_data* data = calloc(1, sizeof(struct libsoccr_sk_data));
+
+				save_sk_header(pre, 1);
+				dump_send(frontend_fd, fd, data, pre, buf);
+				//free(data);
+				/*------------------------------------------------------------------*/
+				data = calloc(1, sizeof(struct libsoccr_sk_data));
+				
+				save_sk_header(pre, 1);
+				gettimeofday(&start,NULL);
+				dump_send(backend_fd, fd, data, pre, buf);
+				gettimeofday(&end,NULL);
+				diff = 1000000 * (end.tv_sec-start.tv_sec)+ end.tv_usec-start.tv_usec;
+				printf("the difference is %ld\n",diff);
+				//free(data);
+				
 			}
 
 
