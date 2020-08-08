@@ -146,7 +146,7 @@ int  pid;			/* current process id */
 int  relative_pid = 1;		/* process id starting at 1 */
 unsigned long pid_bit = 1;      /* bit corresponding to the process id */
 unsigned long all_proc_mask = 1; /* mask of all processes */
-
+int ft_mode;
 struct proto_ipc *ipt_target = NULL; 
 
 volatile unsigned long sleeping_thread_mask; /* Threads that are about to sleep in poll() */
@@ -198,6 +198,9 @@ struct global global = {
 int dump_cfd;
 int dump_backend_fd;
 struct sk_info* sk_data;
+struct sk_info* sk_data1;
+struct sk_info* sk_data2;
+
 
 int stopping;	/* non zero means stopping in progress */
 int killed;	/* non zero means a hard-stop is triggered */
@@ -739,7 +742,7 @@ static void mworker_loop()
 	signal_register_fct(SIGUSR1, mworker_catch_sigterm, SIGUSR1);
 	signal_register_fct(SIGINT, mworker_catch_sigterm, SIGINT);
 	signal_register_fct(SIGHUP, mworker_catch_sighup, SIGHUP);
-	signal_register_fct(SIGUSR2, mworker_catch_sighup, SIGUSR2);
+	//signal_register_fct(SIGUSR2, mworker_catch_sighup, SIGUSR2);
 	signal_register_fct(SIGCHLD, mworker_catch_sigchld, SIGCHLD);
 
 	mworker_unblock_signals();
@@ -2719,14 +2722,15 @@ int listen_to_primary(int port)
 	back_addr.sin_family = AF_INET;  
 	back_addr.sin_addr.s_addr = global.backup_addr;
 	back_addr.sin_port = htons(port);  
-	bind(sockfd, (struct sockaddr*)&back_addr, sizeof(back_addr));
-
+	
 	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, sizeof(one)) < 0)
         perror("setsockopt(SO_REUSEADDR) failed");
 	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, (const char*)&one, sizeof(one)) < 0) 
 		perror("setsockopt(SO_REUSEPORT) failed");
 	if( (setsockopt(sockfd, SOL_IP, IP_TRANSPARENT, &one, sizeof(one)) == -1) ) 
 		printf("IP_TRANSPARENT fail! \n");
+
+	bind(sockfd, (struct sockaddr*)&back_addr, sizeof(back_addr));
 
 	if ((listen(sockfd, 50)) != 0) { 
         printf("Listen failed ...\n"); 
@@ -2798,6 +2802,9 @@ void *pri_proxy_conn()
 	int epfd = 0, listenfd, result;
 	struct epoll_event ev, event[MAX_EVENT];
 	static int cnt = 0;
+	struct  timeval start;
+	struct  timeval end;
+	unsigned  long diff; 
 	// 创建epoll实例
     epfd = epoll_create1(0);
     if (1 == epfd) {
@@ -2850,12 +2857,12 @@ void *pri_proxy_conn()
                         perror("Accept");
                         break;
                     }
-
+					gettimeofday(&start,NULL);
 					struct sk_info* data = get_dump_info(accp_fd);
 					print_info(data);
 
 					int fd = socket(AF_INET, SOCK_STREAM, 0);
-					printf("GGGGGGGGGG tcp state:%d\n", get_tcp_state(fd));
+					
 					//dump_cfd = task_fd;
 					//close(task_fd);
 					
@@ -2875,7 +2882,10 @@ void *pri_proxy_conn()
 					if (tcp_repair_off(fd) < 0) {
 						return -1;
 					}
-					
+					gettimeofday(&end,NULL);
+					diff = 1000000 * (end.tv_sec-start.tv_sec) + end.tv_usec-start.tv_usec;
+        			printf("the difference time is %ld  !!!!!!!!!!!!!!!!!!\n",diff);
+					//printf("time_use is %.10f\n",time_use);
                     __result = getnameinfo(&in_addr, sizeof (in_addr),
                                            host_buf, sizeof (host_buf) / sizeof (host_buf[0]),
                                            port_buf, sizeof (port_buf) / sizeof (port_buf[0]),
@@ -2997,6 +3007,57 @@ void *sync_fd_state()
 			}
 			printf("dump_backend_fd:%d tcp state:%d\n", dump_backend_fd, get_tcp_state(dump_backend_fd));
 			get_sequence_number(dump_backend_fd, &check_seq);
+		}
+	}
+}
+
+void *sync_fd_state_test()
+{
+	int listenfd, accp_fd, cnt = 0, idx = 0, loop = 0;
+	unsigned int base_nic = 0x0;
+	struct libsoccr_sk_data check_seq;
+	struct sockaddr in_addr = { 0 };
+	struct vm_list *vm_data = NULL;
+	struct vm_list *target;
+	struct vmsk_list *target_sk;
+	//struct sk_data_info sk_data;
+	socklen_t in_addr_len = sizeof (in_addr);
+
+	listenfd = listen_to_primary(4000);
+	accp_fd = accept(listenfd, &in_addr, &in_addr_len);
+	printf("FT mode is CUJU_FT_INIT from %08x\n", base_nic);
+	/* create new thread for snapshot */
+
+	vm_data = add_vm_target(&vm_head.vm_list, base_nic, 0x0, NULL);
+	if (!vm_data) {
+		printf("could not create snapshot data");
+			exit(0);
+	}
+
+	vm_data->ipc_socket = accp_fd;
+	vm_data->fault_enable = 1;
+	vm_data->nic[0] = base_nic;
+	printf("[FT_INIT] vm_data: %p\n", vm_data);
+	
+
+	while(sk_data = get_dump_info(accp_fd))
+	{
+		if((cnt++)%2 == 0)	//frontend fd
+		{
+			sk_data1 = sk_data;
+
+		}
+		else	//backend fd
+		{
+			sk_data2 = sk_data;
+
+		}
+
+		//print_sk_data_info(sk_data);
+		if(++loop % 1000 == 0)
+		{
+			print_sk_data_info(sk_data1);
+			print_sk_data_info(sk_data2);
 		}
 	}
 }
@@ -3208,6 +3269,14 @@ int restore_one_tcp_HA(int fd, struct sk_info* data, int is_cfd, int failover)
 	return 0;
 }
 
+void no_ft_trigger(int signum)
+{
+    if (signum == SIGUSR2)
+    {
+		ft_mode = 0;
+        printf("Received SIGUSR2  Enter No FT mode!\n");
+    }
+}
 
 int main(int argc, char **argv)
 {
@@ -3216,20 +3285,20 @@ int main(int argc, char **argv)
 	char errmsg[100];
 	int pidfd = -1;
 	int shm_id = 0;
-
+	ft_mode = 1;
     struct sockaddr_nl src_addr;
     struct sockaddr_nl dest_addr;
     struct iovec iov;
 
 	pthread_t ipc, tid[2];
 	pthread_create(&ipc, NULL, ipc_handler, "Child");
-	
+	signal(SIGUSR2, no_ft_trigger);
 	if(!global.is_primary)
 	{
 		if( pthread_create(&tid[0], NULL, pri_proxy_conn, NULL) != 0 )		
         	printf("Failed to create pri_proxy_conn thread\n");
-		/*if( pthread_create(&tid[1], NULL, sync_fd_state, NULL) != 0 )		
-        	printf("Failed to create sync_fd_state thread\n");
+		if( pthread_create(&tid[1], NULL, sync_fd_state_test, NULL) != 0 )		
+        	printf("Failed to create sync_fd_state_test thread\n");
 		/*if( pthread_create(&tid, NULL, sync_data_conn, (void*) &dump_cfd) != 0 )		
         	printf("Failed to create sync_data thread\n");*/
 	}	
@@ -3372,7 +3441,7 @@ int main(int argc, char **argv)
 	signal_register_fct(SIGQUIT, dump, SIGQUIT);
 	signal_register_fct(SIGUSR1, sig_soft_stop, SIGUSR1);
 	signal_register_fct(SIGHUP, sig_dump_state, SIGHUP);
-	signal_register_fct(SIGUSR2, NULL, 0);
+	//signal_register_fct(SIGUSR2, NULL, 0);
 
 	/* Always catch SIGPIPE even on platforms which define MSG_NOSIGNAL.
 	 * Some recent FreeBSD setups report broken pipes, and MSG_NOSIGNAL
